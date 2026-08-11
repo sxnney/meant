@@ -62,12 +62,13 @@ final class SelectionController {
         if let element,
            let text = selectedText(from: element),
            !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let geometry = selectedGeometry(from: element, selectedText: text)
             return Snapshot(
                 text: text,
                 application: application,
                 focusedElement: element,
                 selectedRange: selectedRange(from: element),
-                selectionGeometry: selectedGeometry(from: element),
+                selectionGeometry: geometry,
                 selectionAppearsPresent: true,
                 method: .accessibility,
                 surroundingContext: context(for: element, application: application, selection: text),
@@ -97,13 +98,14 @@ final class SelectionController {
         let copiedChangeCount = pasteboard.changeCount
         let text = copiedChangeCount != saved.changeCount ? pasteboard.string(forType: .string) ?? "" : ""
         saved.restore(to: pasteboard, ifCurrentChangeCount: copiedChangeCount)
+        let geometry = selectedGeometry(from: element, selectedText: text)
 
         return Snapshot(
             text: text,
             application: application,
             focusedElement: element,
             selectedRange: selectedRange(from: element),
-            selectionGeometry: selectedGeometry(from: element),
+            selectionGeometry: geometry,
             selectionAppearsPresent: selectionAppearsPresent || !text.isEmpty,
             method: text.isEmpty ? .none : .clipboard,
             surroundingContext: context(for: element, application: application, selection: text),
@@ -421,7 +423,7 @@ final class SelectionController {
         return value as? String
     }
 
-    private func selectedGeometry(from element: AXUIElement?) -> SelectionGeometry? {
+    private func selectedGeometry(from element: AXUIElement?, selectedText: String) -> SelectionGeometry? {
         guard let element else { return nil }
         var rangeValue: CFTypeRef?
         guard AXUIElementCopyAttributeValue(
@@ -430,30 +432,48 @@ final class SelectionController {
             &rangeValue
         ) == .success, let rangeValue else { return nil }
 
-        guard let selectionBounds = rect(for: rangeValue, in: element) else { return nil }
-
         var selectedRange = CFRange()
         let rangeAXValue = rangeValue as! AXValue
         guard AXValueGetType(rangeAXValue) == .cfRange,
-              AXValueGetValue(rangeAXValue, .cfRange, &selectedRange) else {
-            return SelectionGeometry(bounds: selectionBounds, finalLineBounds: selectionBounds)
+              AXValueGetValue(rangeAXValue, .cfRange, &selectedRange),
+              selectedRange.length > 0 else { return nil }
+
+        let selectionBounds = rect(for: rangeValue, in: element)
+        let text = selectedText as NSString
+        var trailingNewlineCount = 0
+        while trailingNewlineCount < min(text.length, selectedRange.length) {
+            let character = text.character(at: text.length - trailingNewlineCount - 1)
+            guard character == 10 || character == 13 else { break }
+            trailingNewlineCount += 1
         }
 
-        var finalLineBounds = selectionBounds
-        if selectedRange.length > 0 {
-            for offset in 1...min(8, selectedRange.length) {
-                var tailRange = CFRange(
-                    location: selectedRange.location + selectedRange.length - offset,
-                    length: 1
-                )
-                guard let tailValue = AXValueCreate(.cfRange, &tailRange) else { continue }
-                if let tailBounds = rect(for: tailValue, in: element) {
-                    finalLineBounds = tailBounds
-                    break
-                }
+        let finalCharacterOffset = selectedRange.length - trailingNewlineCount - 1
+        var finalLineBounds: CGRect?
+        if finalCharacterOffset >= 0 {
+            var finalCharacterRange = CFRange(
+                location: selectedRange.location + finalCharacterOffset,
+                length: 1
+            )
+            if let value = AXValueCreate(.cfRange, &finalCharacterRange) {
+                finalLineBounds = rect(for: value, in: element)
             }
         }
-        return SelectionGeometry(bounds: selectionBounds, finalLineBounds: finalLineBounds)
+
+        if finalLineBounds == nil {
+            var endRange = CFRange(
+                location: selectedRange.location + selectedRange.length,
+                length: 0
+            )
+            if let value = AXValueCreate(.cfRange, &endRange) {
+                finalLineBounds = rect(for: value, in: element)
+            }
+        }
+
+        guard let finalLineBounds else { return nil }
+        return SelectionGeometry(
+            bounds: selectionBounds ?? finalLineBounds,
+            finalLineBounds: finalLineBounds
+        )
     }
 
     private func rect(for rangeValue: CFTypeRef, in element: AXUIElement) -> CGRect? {
@@ -470,8 +490,9 @@ final class SelectionController {
         guard AXValueGetType(axValue) == .cgRect else { return nil }
         var rect = CGRect.zero
         guard AXValueGetValue(axValue, .cgRect, &rect),
+              rect.minX.isFinite, rect.minY.isFinite,
               rect.width.isFinite, rect.height.isFinite,
-              !rect.isEmpty else { return nil }
+              rect.width >= 0, rect.height > 0 else { return nil }
         return rect
     }
 

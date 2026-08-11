@@ -178,6 +178,8 @@ final class GlobalHotKeyManager {
             0,
             &hotKey
         )
+        if carbonStatus == noErr { return nil }
+
         let mask = CGEventMask(1) << CGEventType.keyDown.rawValue
         if let eventTap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
@@ -205,7 +207,7 @@ final class GlobalHotKeyManager {
             CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
             CGEvent.tapEnable(tap: eventTap, enable: true)
         }
-        guard carbonStatus == noErr || self.eventTap != nil else {
+        guard self.eventTap != nil else {
             self.shortcut = nil
             return "Meant could not monitor the shortcut."
         }

@@ -14,6 +14,7 @@ final class IntelligenceOverlayController {
     private var placementSession: PlacementSession?
     private var cancellables = Set<AnyCancellable>()
     private var inputCaptureWorkItem: DispatchWorkItem?
+    private var visibilityGeneration: UInt = 0
     private var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
 
     init(viewModel: MeantViewModel) {
@@ -38,7 +39,7 @@ final class IntelligenceOverlayController {
         panel.isReleasedWhenClosed = false
         panel.isFloatingPanel = true
         panel.becomesKeyOnlyIfNeeded = false
-        panel.level = .floating
+        panel.level = .popUpMenu
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         panel.backgroundColor = .clear
         panel.isOpaque = false
@@ -84,6 +85,7 @@ final class IntelligenceOverlayController {
         }
 
         let wasVisible = panel.isVisible
+        visibilityGeneration &+= 1
         let size = preferredSize(for: state)
         panel.ignoresMouseEvents = !stateAcceptsPointer(state)
         if placementSession == nil {
@@ -91,8 +93,6 @@ final class IntelligenceOverlayController {
         }
         applyFrame(size: size, animated: wasVisible)
         if !wasVisible {
-            panel.contentView = makeHostingView()
-            applyPanelMask()
             panel.alphaValue = 0
             panel.orderFrontRegardless()
             NSAnimationContext.runAnimationGroup { context in
@@ -152,14 +152,18 @@ final class IntelligenceOverlayController {
         inputCaptureWorkItem = nil
         inputMonitor.stop()
         guard panel.isVisible else { return }
+        let generation = visibilityGeneration
         NSAnimationContext.runAnimationGroup { context in
             context.duration = reduceMotion ? 0 : 0.08
             context.timingFunction = CAMediaTimingFunction(name: .easeIn)
             panel.animator().alphaValue = 0
-        } completionHandler: { [weak panel] in
+        } completionHandler: { [weak self] in
             DispatchQueue.main.async {
-                panel?.orderOut(nil)
-                panel?.alphaValue = 1
+                guard let self,
+                      self.visibilityGeneration == generation,
+                      self.viewModel.overlayState == .hidden else { return }
+                self.panel.orderOut(nil)
+                self.panel.alphaValue = 1
             }
         }
     }
@@ -191,38 +195,21 @@ final class IntelligenceOverlayController {
             ?? 0
         let bounds = convertAccessibilityRect(geometry.bounds, primaryTop: primaryTop)
         let tail = convertAccessibilityRect(geometry.finalLineBounds, primaryTop: primaryTop)
-        guard let screen = screen(containingMostOf: bounds) else { return }
-        let normalizedBounds = normalize(bounds, scale: screen.backingScaleFactor)
-        var normalizedTail = normalize(tail, scale: screen.backingScaleFactor)
-        guard normalizedBounds.width > 0, normalizedBounds.height > 0 else { return }
-        if !normalizedBounds.insetBy(dx: -8, dy: -8).intersects(normalizedTail) {
-            normalizedTail = NSRect(
-                x: normalizedBounds.maxX - 1,
-                y: normalizedBounds.minY,
-                width: 1,
-                height: min(18, normalizedBounds.height)
-            )
-        }
+        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(tail.center) })
+            ?? screen(containingMostOf: bounds) else { return }
+        guard bounds.width > 0, bounds.height > 0,
+              tail.height > 0,
+              bounds.insetBy(dx: -Metrics.geometryTolerance, dy: -Metrics.geometryTolerance)
+                .intersects(tail) else { return }
         pendingAnchor = SelectionAnchor(
-            bounds: normalizedBounds,
-            finalLineBounds: normalizedTail,
+            bounds: bounds,
+            finalLineBounds: tail,
             screen: screen
         )
     }
 
     private func convertAccessibilityRect(_ rect: CGRect, primaryTop: CGFloat) -> NSRect {
         NSRect(x: rect.minX, y: primaryTop - rect.maxY, width: rect.width, height: rect.height)
-    }
-
-    private func normalize(_ rect: NSRect, scale: CGFloat) -> NSRect {
-        let unit = max(1, scale)
-        func snapped(_ value: CGFloat) -> CGFloat { (value * unit).rounded() / unit }
-        return NSRect(
-            x: snapped(rect.minX),
-            y: snapped(rect.minY),
-            width: max(1 / unit, snapped(rect.width)),
-            height: max(1 / unit, snapped(rect.height))
-        )
     }
 
     private func screen(containingMostOf rect: NSRect) -> NSScreen? {
@@ -386,6 +373,7 @@ final class IntelligenceOverlayController {
         static let screenMargin: CGFloat = 12
         static let anchorGap: CGFloat = 10
         static let anchorInset: CGFloat = 24
+        static let geometryTolerance: CGFloat = 12
     }
 
     private var previewHeight: CGFloat {
