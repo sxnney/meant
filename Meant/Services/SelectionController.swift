@@ -4,6 +4,11 @@ import Carbon.HIToolbox
 
 @MainActor
 final class SelectionController {
+    private struct WindowTextCandidate {
+        let text: String
+        let area: CGFloat
+    }
+
     enum CaptureMethod: Sendable {
         case accessibility
         case clipboard
@@ -128,6 +133,10 @@ final class SelectionController {
     ) -> String {
         var parts: [String] = []
         if let name = application?.localizedName { parts.append("Active app: \(name)") }
+        if let application,
+           let activeWindow = activeWindowConversationText(for: application, excluding: selection) {
+            parts.append("Current window context:\n\(activeWindow)")
+        }
         let trimmedSelection = selection.trimmingCharacters(in: .whitespacesAndNewlines)
         if let element,
            !trimmedSelection.isEmpty,
@@ -142,6 +151,154 @@ final class SelectionController {
             parts.append("Surrounding editor content:\n\(value[start..<end])")
         }
         return parts.joined(separator: "\n\n")
+    }
+
+    func captureEntireFocusedSurface() async -> String? {
+        guard isTrusted else { return nil }
+        let element = focusedElement()
+        let range = selectedRange(from: element)
+        let pasteboard = NSPasteboard.general
+        let saved = PasteboardSnapshot.capture(from: pasteboard)
+
+        sendCommandKey(CGKeyCode(kVK_ANSI_A))
+        try? await Task.sleep(for: .milliseconds(70))
+        sendCommandKey(CGKeyCode(kVK_ANSI_C))
+        try? await Task.sleep(for: .milliseconds(140))
+
+        let captureChangeCount = pasteboard.changeCount
+        let captured = pasteboard.string(forType: .string)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        saved.restore(to: pasteboard, ifCurrentChangeCount: captureChangeCount)
+
+        if let element, let range {
+            var restoredRange = range
+            if let rangeValue = AXValueCreate(.cfRange, &restoredRange) {
+                AXUIElementSetAttributeValue(
+                    element,
+                    kAXSelectedTextRangeAttribute as CFString,
+                    rangeValue
+                )
+            }
+        }
+
+        guard let captured, captured.count >= 40 else { return nil }
+        return String(captured.suffix(30_000))
+    }
+
+    private func activeWindowConversationText(
+        for application: NSRunningApplication,
+        excluding selection: String
+    ) -> String? {
+        let appElement = AXUIElementCreateApplication(application.processIdentifier)
+        var windowValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            appElement,
+            kAXFocusedWindowAttribute as CFString,
+            &windowValue
+        ) == .success,
+        let windowValue else { return nil }
+
+        let window = windowValue as! AXUIElement
+        var candidates: [WindowTextCandidate] = []
+        collectScrollableTextCandidates(from: window, depth: 0, candidates: &candidates)
+        let trimmedSelection = selection.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let best = candidates
+            .map({
+                WindowTextCandidate(
+                    text: cleanWindowText($0.text, excluding: trimmedSelection),
+                    area: $0.area
+                )
+            })
+            .filter({ $0.text.count >= 180 })
+            .max(by: { $0.area < $1.area }) else { return nil }
+        return String(best.text.suffix(18_000))
+    }
+
+    private func collectScrollableTextCandidates(
+        from element: AXUIElement,
+        depth: Int,
+        candidates: inout [WindowTextCandidate]
+    ) {
+        guard depth < 18 else { return }
+        let role = stringAttribute(kAXRoleAttribute, from: element)
+        if role == kAXScrollAreaRole as String {
+            var values: [String] = []
+            collectReadableText(from: element, depth: 0, values: &values)
+            let text = values.joined(separator: "\n")
+            if !text.isEmpty {
+                candidates.append(WindowTextCandidate(text: text, area: area(of: element)))
+            }
+        }
+        for child in children(of: element) {
+            collectScrollableTextCandidates(from: child, depth: depth + 1, candidates: &candidates)
+        }
+    }
+
+    private func collectReadableText(
+        from element: AXUIElement,
+        depth: Int,
+        values: inout [String]
+    ) {
+        guard depth < 22, values.count < 2_000 else { return }
+        let role = stringAttribute(kAXRoleAttribute, from: element)
+        if role == kAXStaticTextRole as String || role == kAXTextAreaRole as String {
+            if let value = stringAttribute(kAXValueAttribute, from: element)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+               !value.isEmpty,
+               values.last != value {
+                values.append(value)
+            }
+        }
+        for child in children(of: element) {
+            collectReadableText(from: child, depth: depth + 1, values: &values)
+        }
+    }
+
+    private func children(of element: AXUIElement) -> [AXUIElement] {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            element,
+            kAXChildrenAttribute as CFString,
+            &value
+        ) == .success else { return [] }
+        return value as? [AXUIElement] ?? []
+    }
+
+    private func stringAttribute(_ attribute: String, from element: AXUIElement) -> String? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            element,
+            attribute as CFString,
+            &value
+        ) == .success else { return nil }
+        return value as? String
+    }
+
+    private func area(of element: AXUIElement) -> CGFloat {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            element,
+            kAXSizeAttribute as CFString,
+            &value
+        ) == .success,
+        let value,
+        CFGetTypeID(value) == AXValueGetTypeID() else { return 0 }
+        let axValue = value as! AXValue
+        guard AXValueGetType(axValue) == .cgSize else { return 0 }
+        var size = CGSize.zero
+        guard AXValueGetValue(axValue, .cgSize, &size) else { return 0 }
+        return size.width * size.height
+    }
+
+    private func cleanWindowText(_ text: String, excluding selection: String) -> String {
+        let lines = text.components(separatedBy: .newlines)
+        var result: [String] = []
+        for line in lines {
+            let value = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !value.isEmpty, value != selection, result.last != value else { continue }
+            result.append(value)
+        }
+        return result.joined(separator: "\n")
     }
 
     func replace(with text: String, using snapshot: Snapshot?) async -> ReplacementResult {

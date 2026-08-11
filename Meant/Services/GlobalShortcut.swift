@@ -14,6 +14,12 @@ struct GlobalShortcut: Codable, Equatable, Sendable {
         keyLabel: "I"
     )
 
+    static let contextDefault = GlobalShortcut(
+        keyCode: UInt32(kVK_ANSI_I),
+        carbonModifiers: UInt32(cmdKey | shiftKey),
+        keyLabel: "I"
+    )
+
     init(keyCode: UInt32, carbonModifiers: UInt32, keyLabel: String) {
         self.keyCode = keyCode
         self.carbonModifiers = carbonModifiers
@@ -90,6 +96,9 @@ final class AppPreferences: ObservableObject {
     @Published var shortcut: GlobalShortcut {
         didSet { save(shortcut, key: Keys.shortcut) }
     }
+    @Published var contextShortcut: GlobalShortcut {
+        didSet { save(contextShortcut, key: Keys.contextShortcut) }
+    }
     @Published var hasCompletedOnboarding: Bool {
         didSet { defaults.set(hasCompletedOnboarding, forKey: Keys.onboarding) }
     }
@@ -98,6 +107,7 @@ final class AppPreferences: ObservableObject {
 
     private enum Keys {
         static let shortcut = "globalShortcut"
+        static let contextShortcut = "contextShortcut"
         static let onboarding = "completedOnboarding.v1"
     }
 
@@ -108,6 +118,12 @@ final class AppPreferences: ObservableObject {
             shortcut = value
         } else {
             shortcut = .default
+        }
+        if let data = defaults.data(forKey: Keys.contextShortcut),
+           let value = try? JSONDecoder().decode(GlobalShortcut.self, from: data) {
+            contextShortcut = value
+        } else {
+            contextShortcut = .contextDefault
         }
         hasCompletedOnboarding = defaults.bool(forKey: Keys.onboarding)
     }
@@ -123,9 +139,11 @@ final class GlobalHotKeyManager {
     private var hotKey: EventHotKeyRef?
     private var handler: EventHandlerRef?
     private let action: () -> Void
+    private let identifier: EventHotKeyID
 
-    init(action: @escaping () -> Void) {
+    init(identifier: UInt32, action: @escaping () -> Void) {
         self.action = action
+        self.identifier = EventHotKeyID(signature: Self.fourCharacterCode("MENT"), id: identifier)
         var type = EventTypeSpec(
             eventClass: OSType(kEventClassKeyboard),
             eventKind: UInt32(kEventHotKeyPressed)
@@ -152,7 +170,6 @@ final class GlobalHotKeyManager {
             self.hotKey = nil
         }
 
-        let identifier = EventHotKeyID(signature: fourCharacterCode("WHET"), id: 1)
         let status = RegisterEventHotKey(
             shortcut.keyCode,
             shortcut.carbonModifiers,
@@ -169,7 +186,7 @@ final class GlobalHotKeyManager {
         if let handler { RemoveEventHandler(handler) }
     }
 
-    private func fourCharacterCode(_ value: String) -> OSType {
+    private static func fourCharacterCode(_ value: String) -> OSType {
         value.utf8.reduce(0) { ($0 << 8) + OSType($1) }
     }
 }

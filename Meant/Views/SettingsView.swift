@@ -77,7 +77,14 @@ struct SettingsView: View {
                 if let error = viewModel.shortcutError {
                     Text(error).foregroundStyle(MeantDesign.graphite)
                 }
-                Text("Use the shortcut to refine the selected prompt. Meant replaces it when possible and otherwise copies it.")
+                LabeledContent("Capture page context") {
+                    ShortcutRecorder(shortcut: contextShortcutBinding)
+                        .frame(width: 138, height: 30)
+                }
+                if let error = viewModel.contextShortcutError {
+                    Text(error).foregroundStyle(MeantDesign.graphite)
+                }
+                Text("Meant reads reliable context from the active window. If a page does not expose enough, focus the page and capture it before refining. Captured context is used once.")
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
             }
@@ -149,6 +156,13 @@ struct SettingsView: View {
         Binding(
             get: { viewModel.preferences.shortcut },
             set: { viewModel.preferences.shortcut = $0 }
+        )
+    }
+
+    private var contextShortcutBinding: Binding<GlobalShortcut> {
+        Binding(
+            get: { viewModel.preferences.contextShortcut },
+            set: { viewModel.preferences.contextShortcut = $0 }
         )
     }
 }

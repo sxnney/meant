@@ -97,6 +97,11 @@ struct IntelligenceOverlayView: View {
                     .font(.system(size: 12, weight: .semibold, design: .rounded))
                     .foregroundStyle(MeantDesign.graphite.opacity(0.72))
                 Spacer()
+                if let contextLabel = viewModel.contextLabel {
+                    Label(contextLabel, systemImage: "text.viewfinder")
+                        .font(.system(size: 9.5, weight: .semibold, design: .rounded))
+                        .foregroundStyle(MeantDesign.graphite.opacity(0.5))
+                }
                 Label(
                     viewModel.deliveryState == .replaced ? "Replaced" : "Copied",
                     systemImage: "checkmark"

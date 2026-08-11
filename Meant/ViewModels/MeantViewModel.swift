@@ -25,6 +25,7 @@ final class MeantViewModel: ObservableObject {
     @Published private(set) var selectionBounds: CGRect?
     @Published private(set) var isStreaming = false
     @Published private(set) var deliveryState: DeliveryState = .pending
+    @Published private(set) var contextLabel: String?
     @Published private(set) var progressMessage = "Refining your prompt"
     @Published private(set) var account: CodexAccount?
     @Published private(set) var model: CodexModel?
@@ -32,6 +33,7 @@ final class MeantViewModel: ObservableObject {
     @Published private(set) var connectionError: String?
     @Published private(set) var isAccessibilityTrusted = false
     @Published var shortcutError: String?
+    @Published var contextShortcutError: String?
 
     let preferences: AppPreferences
     let loginItem = LoginItemController()
@@ -45,6 +47,7 @@ final class MeantViewModel: ObservableObject {
     private var dismissTask: Task<Void, Never>?
     private var interactionID = UUID()
     private var sourceContext = ""
+    private var pendingExplicitContext: String?
     private var previousProgressMessage: String?
 
     private static let progressMessages = [
@@ -94,6 +97,7 @@ final class MeantViewModel: ObservableObject {
         selectionBounds = nil
         snapshot = nil
         sourceContext = ""
+        contextLabel = nil
         chooseProgressMessage()
         overlayState = .acknowledging
 
@@ -112,7 +116,18 @@ final class MeantViewModel: ObservableObject {
             guard interactionID == id, !Task.isCancelled else { return }
             snapshot = captured
             sourceText = captured.text
-            sourceContext = captured.surroundingContext
+            let explicitContext = pendingExplicitContext
+            sourceContext = [
+                captured.surroundingContext,
+                explicitContext.map { "Explicitly captured page context:\n\($0)" } ?? ""
+            ]
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n\n")
+            if explicitContext != nil {
+                contextLabel = "Captured context"
+            } else if captured.surroundingContext.contains("Current window context:") {
+                contextLabel = "Window context"
+            }
             selectionBounds = captured.selectionBounds
             isAccessibilityTrusted = selection.isTrusted
 
@@ -129,6 +144,7 @@ final class MeantViewModel: ObservableObject {
                 scheduleDismiss(after: .seconds(2.2), interactionID: id)
                 return
             }
+            pendingExplicitContext = nil
 
             await ensureConnection()
             guard interactionID == id, !Task.isCancelled else { return }
@@ -137,26 +153,27 @@ final class MeantViewModel: ObservableObject {
                 return
             }
 
-            if isCodex(captured.application),
-               let conversation = try? await codex.recentConversationContext(windowTitle: captured.windowTitle) {
-                sourceContext = [sourceContext, conversation.promptContext]
-                    .filter { !$0.isEmpty }
-                    .joined(separator: "\n\n")
-            }
-            guard interactionID == id, !Task.isCancelled else { return }
-
             transform(using: Self.refinementAction)
         }
     }
 
-    private func isCodex(_ application: NSRunningApplication?) -> Bool {
-        guard let application else { return false }
-        let bundleIdentifier = application.bundleIdentifier?.lowercased() ?? ""
-        let name = application.localizedName?.lowercased() ?? ""
-        return bundleIdentifier.contains("openai.codex")
-            || bundleIdentifier == "com.openai.chat"
-            || name == "codex"
-            || name == "chatgpt"
+    func captureContextForNextRefinement() {
+        stopCurrentWork()
+        interactionID = UUID()
+        let id = interactionID
+        overlayState = .acknowledging
+        progressMessage = "Capturing this page"
+        workTask = Task {
+            let captured = await selection.captureEntireFocusedSurface()
+            guard interactionID == id, !Task.isCancelled else { return }
+            if let captured {
+                pendingExplicitContext = captured
+                overlayState = .noSelection("Context saved for your next refinement")
+            } else {
+                overlayState = .failed("This app did not provide page context")
+            }
+            scheduleDismiss(after: .seconds(2.2), interactionID: id)
+        }
     }
 
     func copyPreview() {

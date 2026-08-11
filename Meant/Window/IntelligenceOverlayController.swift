@@ -70,6 +70,13 @@ final class IntelligenceOverlayController {
         viewModel.beginInvocation()
     }
 
+    func captureContext() {
+        anchorPoint = NSEvent.mouseLocation
+        selectionRect = nil
+        placementSide = nil
+        viewModel.captureContextForNextRefinement()
+    }
+
     func cancel() {
         viewModel.cancelInteraction()
     }
