@@ -69,8 +69,28 @@ struct MeantMark: View {
 
 struct IntelligenceOverlayView: View {
     @ObservedObject var viewModel: MeantViewModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        ZStack {
+            content
+                .id(stateIdentity)
+                .transition(
+                    .asymmetric(
+                        insertion: .opacity.combined(with: .scale(scale: 0.97)),
+                        removal: .opacity.combined(with: .scale(scale: 0.985))
+                    )
+                )
+        }
+        .animation(
+            reduceMotion ? nil : .timingCurve(0.23, 1, 0.32, 1, duration: 0.3),
+            value: stateIdentity
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    @ViewBuilder
+    private var content: some View {
         Group {
             switch viewModel.overlayState {
             case .hidden:
@@ -82,9 +102,13 @@ struct IntelligenceOverlayView: View {
             case .waitingForContext(let message):
                 contextWaiting(message)
             case .contextCaptured:
-                messageSurface("Context captured · refining now", symbol: "checkmark")
+                messageSurface(viewModel.contextLabel ?? "Context captured", symbol: "checkmark")
             case .transforming:
-                MaterialTrace(label: viewModel.progressMessage)
+                MaterialTrace(
+                    label: viewModel.progressMessage,
+                    showsDetail: viewModel.showsProgressDetail,
+                    hasContext: viewModel.contextLabel != nil
+                )
             case .preview(let action):
                 preview(action)
             case .noSelection(let message):
@@ -93,7 +117,20 @@ struct IntelligenceOverlayView: View {
                 failure(message)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var stateIdentity: String {
+        switch viewModel.overlayState {
+        case .hidden: "hidden"
+        case .acknowledging: "acknowledging"
+        case .choosingContext: "choosingContext"
+        case .waitingForContext: "waitingForContext"
+        case .contextCaptured: "contextCaptured"
+        case .transforming: viewModel.showsProgressDetail ? "transformingDetail" : "transforming"
+        case .preview: "preview"
+        case .noSelection: "message"
+        case .failed: "failed"
+        }
     }
 
     private var contextChoice: some View {
@@ -130,9 +167,7 @@ struct IntelligenceOverlayView: View {
             }
 
             Spacer(minLength: 8)
-            Text("Esc cancels")
-                .font(.system(size: 9.5, weight: .medium))
-                .foregroundStyle(MeantDesign.graphite.opacity(0.42))
+            actionHint(key: "↩", label: "Capture", primary: true)
         }
         .padding(.horizontal, 15)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -157,9 +192,7 @@ struct IntelligenceOverlayView: View {
                     .foregroundStyle(MeantDesign.graphite.opacity(0.72))
                 Spacer()
                 if let contextLabel = viewModel.contextLabel {
-                    Label(contextLabel, systemImage: "text.viewfinder")
-                        .font(.system(size: 9.5, weight: .semibold, design: .rounded))
-                        .foregroundStyle(MeantDesign.graphite.opacity(0.5))
+                    contextCapsule(contextLabel)
                 }
                 Label(
                     viewModel.deliveryState == .replaced ? "Replaced" : "Copied",
@@ -188,6 +221,16 @@ struct IntelligenceOverlayView: View {
             Divider().opacity(0.35).padding(.horizontal, 15)
 
             HStack(spacing: 18) {
+                if viewModel.deliveryState == .replaced {
+                    Button { viewModel.undoReplacement() } label: {
+                        Label("Undo", systemImage: "arrow.uturn.backward")
+                    }
+                    .softControl()
+                    Button { viewModel.retry() } label: {
+                        Label("Try again", systemImage: "arrow.clockwise")
+                    }
+                    .softControl()
+                }
                 Button { viewModel.copyPreview() } label: {
                     Label(
                         viewModel.deliveryState == .copied ? "Copy again" : "Copy",
@@ -206,6 +249,16 @@ struct IntelligenceOverlayView: View {
             .frame(height: 36)
         }
         .refractedSurface()
+    }
+
+    private func contextCapsule(_ label: String) -> some View {
+        Label(label, systemImage: "text.viewfinder")
+            .font(.system(size: 9.5, weight: .semibold, design: .rounded))
+            .foregroundStyle(MeantDesign.graphite.opacity(0.54))
+            .padding(.horizontal, 8)
+            .frame(height: 22)
+            .background(MeantDesign.graphite.opacity(0.055), in: Capsule())
+            .help(viewModel.contextPreview ?? label)
     }
 
     private func messageSurface(_ message: String, symbol: String) -> some View {
@@ -247,6 +300,8 @@ struct IntelligenceOverlayView: View {
 
 private struct MaterialTrace: View {
     let label: String
+    var showsDetail = false
+    var hasContext = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var startedAt = Date()
 
@@ -259,27 +314,63 @@ private struct MaterialTrace: View {
     var body: some View {
         TimelineView(.periodic(from: .now, by: 0.05)) { timeline in
             let elapsed = max(0, timeline.date.timeIntervalSince(startedAt))
-            HStack(spacing: 10) {
-                PixelWave(elapsed: elapsed, delays: cellDelays, reduceMotion: reduceMotion)
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 10) {
+                    PixelWave(elapsed: elapsed, delays: cellDelays, reduceMotion: reduceMotion)
 
-                shimmeringLabel(elapsed: elapsed)
-                    .lineLimit(1)
+                    shimmeringLabel(elapsed: elapsed)
+                        .lineLimit(1)
 
-                Spacer(minLength: 2)
+                    Spacer(minLength: 2)
 
-                Text(elapsedLabel(elapsed))
-                    .font(.system(size: 10.5, weight: .medium, design: .monospaced))
-                    .monospacedDigit()
-                    .foregroundStyle(MeantDesign.graphite.opacity(0.42))
-                    .contentTransition(.numericText())
+                    Text(elapsedLabel(elapsed))
+                        .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                        .monospacedDigit()
+                        .foregroundStyle(MeantDesign.graphite.opacity(0.42))
+                        .contentTransition(.numericText())
+                }
+                .frame(height: 46)
+
+                if showsDetail {
+                    Divider().opacity(0.22)
+                    VStack(alignment: .leading, spacing: 7) {
+                        progressRow("Prompt understood", complete: true)
+                        progressRow(hasContext ? "Supporting context included" : "Working from the selection", complete: true)
+                        progressRow("Refining the instruction", complete: false)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.top, 10)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                }
             }
-            .padding(.horizontal, 14)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .refractedSurface()
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("\(label), \(elapsedLabel(elapsed))")
         }
         .onAppear { startedAt = Date() }
+        .animation(
+            reduceMotion ? nil : .timingCurve(0.23, 1, 0.32, 1, duration: 0.32),
+            value: showsDetail
+        )
+    }
+
+    private func progressRow(_ text: String, complete: Bool) -> some View {
+        HStack(spacing: 8) {
+            if complete {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 8.5, weight: .bold))
+                    .foregroundStyle(MeantDesign.graphite.opacity(0.42))
+                    .frame(width: 12)
+            } else {
+                ProgressView()
+                    .controlSize(.mini)
+                    .frame(width: 12)
+            }
+            Text(text)
+                .font(.system(size: 10.5, weight: .medium, design: .rounded))
+                .foregroundStyle(MeantDesign.graphite.opacity(complete ? 0.46 : 0.72))
+        }
     }
 
     private func shimmeringLabel(elapsed: TimeInterval) -> some View {

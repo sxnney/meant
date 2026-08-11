@@ -29,6 +29,8 @@ final class MeantViewModel: ObservableObject {
     @Published private(set) var isStreaming = false
     @Published private(set) var deliveryState: DeliveryState = .pending
     @Published private(set) var contextLabel: String?
+    @Published private(set) var contextPreview: String?
+    @Published private(set) var showsProgressDetail = false
     @Published private(set) var progressMessage = "Refining your prompt"
     @Published private(set) var account: CodexAccount?
     @Published private(set) var model: CodexModel?
@@ -46,6 +48,7 @@ final class MeantViewModel: ObservableObject {
     private var snapshot: SelectionController.Snapshot?
     private var workTask: Task<Void, Never>?
     private var dismissTask: Task<Void, Never>?
+    private var progressDetailTask: Task<Void, Never>?
     private var interactionID = UUID()
     private var sourceContext = ""
     private var previousProgressMessage: String?
@@ -98,6 +101,8 @@ final class MeantViewModel: ObservableObject {
         snapshot = nil
         sourceContext = ""
         contextLabel = nil
+        contextPreview = nil
+        showsProgressDetail = false
         chooseProgressMessage()
         overlayState = .acknowledging
 
@@ -149,7 +154,9 @@ final class MeantViewModel: ObservableObject {
             sourceContext = [sourceContext, "Supporting context selected by the user:\n\(captured.text)"]
                 .filter { !$0.isEmpty }
                 .joined(separator: "\n\n")
-            contextLabel = "Context included"
+            let trimmed = captured.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            contextLabel = "Context · \(trimmed.count.formatted()) characters"
+            contextPreview = String(trimmed.prefix(180))
             overlayState = .contextCaptured
             try? await Task.sleep(for: .milliseconds(420))
             guard interactionID == id, !Task.isCancelled else { return }
@@ -191,6 +198,26 @@ final class MeantViewModel: ObservableObject {
         selection.copy(resultText)
         deliveryState = .copied
         scheduleDismiss(after: .seconds(3), interactionID: interactionID)
+    }
+
+    func undoReplacement() {
+        guard case .preview = overlayState,
+              deliveryState == .replaced,
+              !resultText.isEmpty else { return }
+        dismissTask?.cancel()
+        let id = interactionID
+        workTask = Task {
+            let restored = await selection.undo(using: snapshot, replacementText: resultText)
+            guard interactionID == id, !Task.isCancelled else { return }
+            if restored {
+                deliveryState = .copied
+                selection.copy(resultText)
+                overlayState = .noSelection("Original text restored · refinement copied")
+                scheduleDismiss(after: .seconds(2.4), interactionID: id)
+            } else {
+                overlayState = .failed("Could not restore the original text")
+            }
+        }
     }
 
     func retry() {
@@ -239,6 +266,10 @@ final class MeantViewModel: ObservableObject {
             }
 
         case .preview:
+            if code == CGKeyCode(kVK_ANSI_Z), flags.contains(.maskCommand) {
+                undoReplacement()
+                return true
+            }
             if code == CGKeyCode(kVK_Return) || code == CGKeyCode(kVK_ANSI_KeypadEnter) {
                 copyPreview()
                 return true
@@ -341,9 +372,18 @@ final class MeantViewModel: ObservableObject {
         resultText = ""
         deliveryState = .pending
         isStreaming = true
+        showsProgressDetail = false
         overlayState = .transforming(action)
         let source = sourceText
         let context = sourceContext
+
+        progressDetailTask?.cancel()
+        progressDetailTask = Task {
+            try? await Task.sleep(for: .seconds(4))
+            guard !Task.isCancelled, self.interactionID == id,
+                  case .transforming = self.overlayState else { return }
+            self.showsProgressDetail = true
+        }
 
         workTask = Task {
             do {
@@ -353,6 +393,8 @@ final class MeantViewModel: ObservableObject {
                 }
                 guard interactionID == id, !Task.isCancelled else { return }
                 isStreaming = false
+                progressDetailTask?.cancel()
+                showsProgressDetail = false
                 guard !resultText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                     overlayState = .failed("Codex returned an empty result")
                     return
@@ -368,6 +410,8 @@ final class MeantViewModel: ObservableObject {
             } catch {
                 guard interactionID == id else { return }
                 isStreaming = false
+                progressDetailTask?.cancel()
+                showsProgressDetail = false
                 overlayState = .failed(readable(error))
             }
         }
@@ -401,8 +445,11 @@ final class MeantViewModel: ObservableObject {
         workTask = nil
         dismissTask?.cancel()
         dismissTask = nil
+        progressDetailTask?.cancel()
+        progressDetailTask = nil
         codex.cancelAllTurns()
         isStreaming = false
+        showsProgressDetail = false
         if !keepState { resultText = "" }
     }
 
@@ -418,4 +465,5 @@ final class MeantViewModel: ObservableObject {
         previousProgressMessage = message
         progressMessage = message
     }
+
 }

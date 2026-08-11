@@ -58,6 +58,14 @@ final class IntelligenceOverlayController {
             .removeDuplicates()
             .sink { [weak self] state in self?.render(state) }
             .store(in: &cancellables)
+
+        viewModel.$showsProgressDetail
+            .removeDuplicates()
+            .sink { [weak self] _ in
+                guard let self, self.viewModel.isVisible else { return }
+                self.position(size: self.preferredSize(for: self.viewModel.overlayState), animated: true)
+            }
+            .store(in: &cancellables)
     }
 
     func invoke() {
@@ -82,15 +90,13 @@ final class IntelligenceOverlayController {
             return
         }
 
-        DispatchQueue.main.async { [weak self] in
-            guard let self, self.viewModel.overlayState == state else { return }
-            self.panel.contentView = self.makeHostingView()
-            self.applyPanelMask()
-        }
+        let wasVisible = panel.isVisible
         let size = preferredSize(for: state)
         panel.ignoresMouseEvents = !stateAcceptsPointer(state)
-        position(size: size, animated: panel.isVisible)
-        if !panel.isVisible {
+        position(size: size, animated: wasVisible)
+        if !wasVisible {
+            panel.contentView = makeHostingView()
+            applyPanelMask()
             panel.alphaValue = 0
             panel.orderFrontRegardless()
             NSAnimationContext.runAnimationGroup { context in
@@ -183,8 +189,14 @@ final class IntelligenceOverlayController {
         guard let visible = screen?.visibleFrame else { return }
 
         let anchor = selectionRect ?? NSRect(x: anchorPoint.x, y: anchorPoint.y, width: 1, height: 1)
-        if placementSide == nil {
-            placementSide = bestPlacement(for: NSSize(width: 440, height: 460), anchor: anchor, visible: visible)
+        let bestSide = bestPlacement(for: size, anchor: anchor, visible: visible)
+        if let current = placementSide {
+            let safe = visible.insetBy(dx: 10, dy: 10)
+            let currentCost = placementCost(current, size: size, anchor: anchor, safe: safe)
+            let bestCost = placementCost(bestSide, size: size, anchor: anchor, safe: safe)
+            if currentCost > bestCost + 18 { placementSide = bestSide }
+        } else {
+            placementSide = bestSide
         }
         var origin = origin(for: placementSide ?? .below, size: size, anchor: anchor)
 
@@ -194,8 +206,10 @@ final class IntelligenceOverlayController {
 
         if animated {
             NSAnimationContext.runAnimationGroup { context in
-                context.duration = reduceMotion ? 0 : 0.14
-                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                context.duration = reduceMotion ? 0 : 0.3
+                context.timingFunction = CAMediaTimingFunction(
+                    controlPoints: 0.23, 1, 0.32, 1
+                )
                 panel.animator().setFrame(frame, display: true)
             }
         } else {
@@ -261,7 +275,10 @@ final class IntelligenceOverlayController {
         case .choosingContext: NSSize(width: 430, height: Metrics.choiceHeight)
         case .waitingForContext: NSSize(width: 440, height: Metrics.twoLineHeight)
         case .contextCaptured: NSSize(width: 270, height: Metrics.singleLineHeight)
-        case .transforming: NSSize(width: 300, height: Metrics.singleLineHeight)
+        case .transforming:
+            viewModel.showsProgressDetail
+                ? NSSize(width: 330, height: Metrics.progressHeight)
+                : NSSize(width: 300, height: Metrics.singleLineHeight)
         case .preview:
             NSSize(width: 440, height: previewHeight)
         case .noSelection: NSSize(width: 280, height: Metrics.singleLineHeight)
@@ -273,6 +290,7 @@ final class IntelligenceOverlayController {
         static let singleLineHeight: CGFloat = 46
         static let choiceHeight: CGFloat = 52
         static let twoLineHeight: CGFloat = 64
+        static let progressHeight: CGFloat = 126
     }
 
     private var previewHeight: CGFloat {
