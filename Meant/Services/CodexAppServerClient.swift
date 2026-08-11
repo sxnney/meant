@@ -343,7 +343,7 @@ final class CodexAppServerClient: @unchecked Sendable {
                     "clientInfo": [
                         "name": "meant_macos",
                         "title": "Meant",
-                        "version": "1.4.0"
+                        "version": "1.5.0"
                     ]
                 ]
             ) { [weak self] result in

@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import Combine
 import CoreGraphics
 import SwiftUI
@@ -30,24 +31,24 @@ final class IntelligenceOverlayController {
             outsideClickHandler: { [weak panel, weak viewModel] in
                 guard let panel, panel.isVisible,
                       !panel.frame.contains(NSEvent.mouseLocation) else { return }
-                viewModel?.cancelInteraction()
+                viewModel?.handleOutsideClick()
             }
         )
 
         panel.isReleasedWhenClosed = false
         panel.isFloatingPanel = true
         panel.becomesKeyOnlyIfNeeded = false
-        panel.level = .popUpMenu
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
+        panel.level = .floating
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         panel.backgroundColor = .clear
         panel.isOpaque = false
         panel.hasShadow = false
         panel.hidesOnDeactivate = false
         panel.animationBehavior = .none
-        panel.contentView = NSHostingView(rootView: IntelligenceOverlayView(viewModel: viewModel))
+        panel.contentView = makeHostingView()
+        applyPanelMask()
 
         viewModel.onDismiss = { [weak self] in self?.hide() }
-        viewModel.onYieldFocus = { [weak self] in self?.yieldFocus() }
 
         viewModel.$selectionBounds
             .sink { [weak self] bounds in self?.updateSelectionAnchor(bounds) }
@@ -60,6 +61,7 @@ final class IntelligenceOverlayController {
     }
 
     func invoke() {
+        if viewModel.handleRepeatedRefineShortcut() { return }
         if viewModel.isVisible {
             viewModel.cancelInteraction()
             return
@@ -68,13 +70,6 @@ final class IntelligenceOverlayController {
         selectionRect = nil
         placementSide = nil
         viewModel.beginInvocation()
-    }
-
-    func captureContext() {
-        anchorPoint = NSEvent.mouseLocation
-        selectionRect = nil
-        placementSide = nil
-        viewModel.captureContextForNextRefinement()
     }
 
     func cancel() {
@@ -89,9 +84,8 @@ final class IntelligenceOverlayController {
 
         DispatchQueue.main.async { [weak self] in
             guard let self, self.viewModel.overlayState == state else { return }
-            self.panel.contentView = NSHostingView(
-                rootView: IntelligenceOverlayView(viewModel: self.viewModel)
-            )
+            self.panel.contentView = self.makeHostingView()
+            self.applyPanelMask()
         }
         let size = preferredSize(for: state)
         panel.ignoresMouseEvents = !stateAcceptsPointer(state)
@@ -105,7 +99,50 @@ final class IntelligenceOverlayController {
                 panel.animator().alphaValue = 1
             }
         }
-        beginInputCaptureAfterShortcut()
+        if case .waitingForContext = state {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
+                guard let self, case .waitingForContext = self.viewModel.overlayState else { return }
+                self.panel.orderFrontRegardless()
+            }
+        }
+        if stateKeepsOriginalFocus(state) {
+            inputCaptureWorkItem?.cancel()
+            inputCaptureWorkItem = nil
+            if case .waitingForContext = state {
+                inputMonitor.startPassiveContextCapture()
+            } else {
+                inputMonitor.stop()
+            }
+        } else {
+            beginInputCaptureAfterShortcut()
+        }
+    }
+
+    private func makeHostingView() -> NSView {
+        let hostingView = TransparentHostingView(
+            rootView: IntelligenceOverlayView(viewModel: viewModel)
+        )
+        hostingView.wantsLayer = true
+        hostingView.layer?.backgroundColor = NSColor.clear.cgColor
+        hostingView.layer?.cornerRadius = 18
+        hostingView.layer?.cornerCurve = .continuous
+        hostingView.layer?.masksToBounds = true
+        return hostingView
+    }
+
+    private func applyPanelMask() {
+        guard let contentView = panel.contentView else { return }
+        contentView.wantsLayer = true
+        contentView.layer?.backgroundColor = NSColor.clear.cgColor
+        contentView.layer?.cornerRadius = 18
+        contentView.layer?.cornerCurve = .continuous
+        contentView.layer?.masksToBounds = true
+
+        panel.contentView?.superview?.wantsLayer = true
+        panel.contentView?.superview?.layer?.backgroundColor = NSColor.clear.cgColor
+        panel.contentView?.superview?.layer?.cornerRadius = 18
+        panel.contentView?.superview?.layer?.cornerCurve = .continuous
+        panel.contentView?.superview?.layer?.masksToBounds = true
     }
 
     private func hide() {
@@ -123,14 +160,6 @@ final class IntelligenceOverlayController {
                 panel?.alphaValue = 1
             }
         }
-    }
-
-    private func yieldFocus() {
-        inputCaptureWorkItem?.cancel()
-        inputCaptureWorkItem = nil
-        inputMonitor.stop()
-        panel.orderOut(nil)
-        panel.alphaValue = 1
     }
 
     private func updateSelectionAnchor(_ bounds: CGRect?) {
@@ -228,13 +257,22 @@ final class IntelligenceOverlayController {
     private func preferredSize(for state: MeantViewModel.OverlayState) -> NSSize {
         switch state {
         case .hidden: NSSize(width: 1, height: 1)
-        case .acknowledging: NSSize(width: 220, height: 34)
-        case .transforming: NSSize(width: 260, height: 36)
+        case .acknowledging: NSSize(width: 240, height: Metrics.singleLineHeight)
+        case .choosingContext: NSSize(width: 430, height: Metrics.choiceHeight)
+        case .waitingForContext: NSSize(width: 440, height: Metrics.twoLineHeight)
+        case .contextCaptured: NSSize(width: 270, height: Metrics.singleLineHeight)
+        case .transforming: NSSize(width: 280, height: Metrics.singleLineHeight)
         case .preview:
             NSSize(width: 440, height: previewHeight)
-        case .noSelection: NSSize(width: 248, height: 42)
-        case .failed: NSSize(width: 340, height: 64)
+        case .noSelection: NSSize(width: 280, height: Metrics.singleLineHeight)
+        case .failed: NSSize(width: 360, height: Metrics.twoLineHeight)
         }
+    }
+
+    private enum Metrics {
+        static let singleLineHeight: CGFloat = 46
+        static let choiceHeight: CGFloat = 52
+        static let twoLineHeight: CGFloat = 64
     }
 
     private var previewHeight: CGFloat {
@@ -246,6 +284,15 @@ final class IntelligenceOverlayController {
         switch state {
         case .preview, .failed: true
         default: false
+        }
+    }
+
+    private func stateKeepsOriginalFocus(_ state: MeantViewModel.OverlayState) -> Bool {
+        switch state {
+        case .waitingForContext, .contextCaptured, .acknowledging, .transforming:
+            true
+        default:
+            false
         }
     }
 
@@ -268,6 +315,21 @@ final class IntelligenceOverlayController {
     }
 }
 
+private final class TransparentHostingView<Content: View>: NSHostingView<Content> {
+    override var isOpaque: Bool { false }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.clear.cgColor
+        layer?.cornerRadius = 18
+        layer?.cornerCurve = .continuous
+        layer?.masksToBounds = true
+        window?.backgroundColor = .clear
+        window?.isOpaque = false
+    }
+}
+
 private final class IntelligencePanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
@@ -278,6 +340,9 @@ private final class OverlayInputMonitor {
     private var localKeyMonitor: Any?
     private var localMouseMonitor: Any?
     private var globalMouseMonitor: Any?
+    private var globalKeyMonitor: Any?
+    private var passiveEventTap: CFMachPort?
+    private var passiveRunLoopSource: CFRunLoopSource?
     private let keyHandler: (CGKeyCode, CGEventFlags) -> Bool
     private let outsideClickHandler: () -> Void
 
@@ -292,6 +357,8 @@ private final class OverlayInputMonitor {
     }
 
     func start() {
+        if let globalKeyMonitor { NSEvent.removeMonitor(globalKeyMonitor) }
+        globalKeyMonitor = nil
         if localKeyMonitor == nil {
             localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
                 guard let self else { return event }
@@ -315,13 +382,64 @@ private final class OverlayInputMonitor {
         }
     }
 
+    func startPassiveContextCapture() {
+        stop()
+        let mask = CGEventMask(1) << CGEventType.keyDown.rawValue
+        if let tap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
+            eventsOfInterest: mask,
+            callback: { _, type, event, userInfo in
+                guard type == .keyDown, let userInfo else {
+                    return Unmanaged.passUnretained(event)
+                }
+                let monitor = Unmanaged<OverlayInputMonitor>.fromOpaque(userInfo).takeUnretainedValue()
+                let code = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
+                guard code == CGKeyCode(kVK_Return)
+                        || code == CGKeyCode(kVK_ANSI_KeypadEnter)
+                        || code == CGKeyCode(kVK_Escape) else {
+                    return Unmanaged.passUnretained(event)
+                }
+                let flags = event.flags
+                DispatchQueue.main.async {
+                    _ = monitor.keyHandler(code, flags)
+                }
+                return nil
+            },
+            userInfo: Unmanaged.passUnretained(self).toOpaque()
+        ) {
+            let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+            passiveEventTap = tap
+            passiveRunLoopSource = source
+            CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+            CGEvent.tapEnable(tap: tap, enable: true)
+            return
+        }
+
+        globalKeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard event.keyCode == UInt16(kVK_Return)
+                    || event.keyCode == UInt16(kVK_ANSI_KeypadEnter)
+                    || event.keyCode == UInt16(kVK_Escape) else { return }
+            _ = self?.keyHandler(CGKeyCode(event.keyCode), event.cgEvent?.flags ?? [])
+        }
+    }
+
     func stop() {
         if let localKeyMonitor { NSEvent.removeMonitor(localKeyMonitor) }
         if let localMouseMonitor { NSEvent.removeMonitor(localMouseMonitor) }
         if let globalMouseMonitor { NSEvent.removeMonitor(globalMouseMonitor) }
+        if let globalKeyMonitor { NSEvent.removeMonitor(globalKeyMonitor) }
+        if let passiveRunLoopSource {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), passiveRunLoopSource, .commonModes)
+        }
+        if let passiveEventTap { CFMachPortInvalidate(passiveEventTap) }
         localKeyMonitor = nil
         localMouseMonitor = nil
         globalMouseMonitor = nil
+        globalKeyMonitor = nil
+        passiveRunLoopSource = nil
+        passiveEventTap = nil
     }
 
 }

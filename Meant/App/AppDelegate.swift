@@ -9,11 +9,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private var overlayController: IntelligenceOverlayController?
     private var hotKeyManager: GlobalHotKeyManager?
-    private var contextHotKeyManager: GlobalHotKeyManager?
     private var statusItem: NSStatusItem?
     private var settingsWindowController: NSWindowController?
     private var shortcutItem: NSMenuItem?
-    private var contextShortcutItem: NSMenuItem?
     private var connectionItem: NSMenuItem?
     private var loginItem: NSMenuItem?
     private var cancellables = Set<AnyCancellable>()
@@ -33,27 +31,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         hotKeyManager = manager
         viewModel.shortcutError = manager.register(viewModel.preferences.shortcut)
 
-        let contextManager = GlobalHotKeyManager(identifier: 2) { [weak self] in
-            self?.overlayController?.captureContext()
-        }
-        contextHotKeyManager = contextManager
-        viewModel.contextShortcutError = contextManager.register(viewModel.preferences.contextShortcut)
-
         viewModel.preferences.$shortcut
             .dropFirst()
             .sink { [weak self] shortcut in
                 guard let self else { return }
                 self.viewModel.shortcutError = self.hotKeyManager?.register(shortcut)
                 self.updateShortcutMenuItem()
-            }
-            .store(in: &cancellables)
-
-        viewModel.preferences.$contextShortcut
-            .dropFirst()
-            .sink { [weak self] shortcut in
-                guard let self else { return }
-                self.viewModel.contextShortcutError = self.contextHotKeyManager?.register(shortcut)
-                self.updateContextShortcutMenuItem()
             }
             .store(in: &cancellables)
 
@@ -106,12 +89,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(use)
         shortcutItem = use
         updateShortcutMenuItem()
-
-        let capture = NSMenuItem(title: "Capture Context for Next Refinement", action: #selector(captureContext), keyEquivalent: "")
-        capture.target = self
-        menu.addItem(capture)
-        contextShortcutItem = capture
-        updateContextShortcutMenuItem()
 
         let connection = NSMenuItem(title: "Connecting to Codex…", action: nil, keyEquivalent: "")
         connection.isEnabled = false
@@ -167,12 +144,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem?.button?.toolTip = "Meant · \(shortcut.displayName)"
     }
 
-    private func updateContextShortcutMenuItem() {
-        let shortcut = viewModel.preferences.contextShortcut
-        contextShortcutItem?.keyEquivalent = shortcut.menuKeyEquivalent
-        contextShortcutItem?.keyEquivalentModifierMask = shortcut.cocoaModifiers
-    }
-
     private func updateConnectionMenuItem() {
         connectionItem?.title = viewModel.connectionLabel
     }
@@ -180,12 +151,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func invoke() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { [weak self] in
             self?.overlayController?.invoke()
-        }
-    }
-
-    @objc private func captureContext() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { [weak self] in
-            self?.overlayController?.captureContext()
         }
     }
 

@@ -138,6 +138,9 @@ final class AppPreferences: ObservableObject {
 final class GlobalHotKeyManager {
     private var hotKey: EventHotKeyRef?
     private var handler: EventHandlerRef?
+    private var eventTap: CFMachPort?
+    private var runLoopSource: CFRunLoopSource?
+    private var shortcut: GlobalShortcut?
     private let action: () -> Void
     private let identifier: EventHotKeyID
 
@@ -150,9 +153,9 @@ final class GlobalHotKeyManager {
         )
         InstallEventHandler(
             GetApplicationEventTarget(),
-            { _, _, userData in
-                guard let userData else { return OSStatus(eventNotHandledErr) }
-                let manager = Unmanaged<GlobalHotKeyManager>.fromOpaque(userData).takeUnretainedValue()
+            { _, _, userInfo in
+                guard let userInfo else { return OSStatus(eventNotHandledErr) }
+                let manager = Unmanaged<GlobalHotKeyManager>.fromOpaque(userInfo).takeUnretainedValue()
                 DispatchQueue.main.async { manager.action() }
                 return noErr
             },
@@ -165,12 +168,9 @@ final class GlobalHotKeyManager {
 
     @discardableResult
     func register(_ shortcut: GlobalShortcut) -> String? {
-        if let hotKey {
-            UnregisterEventHotKey(hotKey)
-            self.hotKey = nil
-        }
-
-        let status = RegisterEventHotKey(
+        stop()
+        self.shortcut = shortcut
+        let carbonStatus = RegisterEventHotKey(
             shortcut.keyCode,
             shortcut.carbonModifiers,
             identifier,
@@ -178,12 +178,73 @@ final class GlobalHotKeyManager {
             0,
             &hotKey
         )
-        return status == noErr ? nil : "That shortcut is already in use."
+        let mask = CGEventMask(1) << CGEventType.keyDown.rawValue
+        if let eventTap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
+            eventsOfInterest: mask,
+            callback: { _, type, event, userInfo in
+                guard let userInfo else { return Unmanaged.passUnretained(event) }
+                let manager = Unmanaged<GlobalHotKeyManager>.fromOpaque(userInfo).takeUnretainedValue()
+                if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+                    if let tap = manager.eventTap { CGEvent.tapEnable(tap: tap, enable: true) }
+                    return Unmanaged.passUnretained(event)
+                }
+                guard type == .keyDown, manager.matches(event) else {
+                    return Unmanaged.passUnretained(event)
+                }
+                DispatchQueue.main.async { manager.action() }
+                return nil
+            },
+            userInfo: Unmanaged.passUnretained(self).toOpaque()
+        ) {
+            let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, eventTap, 0)
+            self.eventTap = eventTap
+            runLoopSource = source
+            CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+            CGEvent.tapEnable(tap: eventTap, enable: true)
+        }
+        guard carbonStatus == noErr || self.eventTap != nil else {
+            self.shortcut = nil
+            return "Meant could not monitor the shortcut."
+        }
+        return nil
+    }
+
+    private func matches(_ event: CGEvent) -> Bool {
+        guard let shortcut,
+              event.getIntegerValueField(.keyboardEventKeycode) == Int64(shortcut.keyCode) else {
+            return false
+        }
+        let flags = event.flags
+        var modifiers: UInt32 = 0
+        if flags.contains(.maskControl) { modifiers |= UInt32(controlKey) }
+        if flags.contains(.maskAlternate) { modifiers |= UInt32(optionKey) }
+        if flags.contains(.maskShift) { modifiers |= UInt32(shiftKey) }
+        if flags.contains(.maskCommand) { modifiers |= UInt32(cmdKey) }
+        return modifiers == shortcut.carbonModifiers
+    }
+
+    private func stop() {
+        if let hotKey { UnregisterEventHotKey(hotKey) }
+        if let runLoopSource {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
+        }
+        if let eventTap { CFMachPortInvalidate(eventTap) }
+        runLoopSource = nil
+        eventTap = nil
+        hotKey = nil
+        shortcut = nil
     }
 
     deinit {
         if let hotKey { UnregisterEventHotKey(hotKey) }
         if let handler { RemoveEventHandler(handler) }
+        if let runLoopSource {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
+        }
+        if let eventTap { CFMachPortInvalidate(eventTap) }
     }
 
     private static func fourCharacterCode(_ value: String) -> OSType {

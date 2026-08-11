@@ -133,10 +133,6 @@ final class SelectionController {
     ) -> String {
         var parts: [String] = []
         if let name = application?.localizedName { parts.append("Active app: \(name)") }
-        if let application,
-           let activeWindow = activeWindowConversationText(for: application, excluding: selection) {
-            parts.append("Current window context:\n\(activeWindow)")
-        }
         let trimmedSelection = selection.trimmingCharacters(in: .whitespacesAndNewlines)
         if let element,
            !trimmedSelection.isEmpty,
@@ -151,38 +147,6 @@ final class SelectionController {
             parts.append("Surrounding editor content:\n\(value[start..<end])")
         }
         return parts.joined(separator: "\n\n")
-    }
-
-    func captureEntireFocusedSurface() async -> String? {
-        guard isTrusted else { return nil }
-        let element = focusedElement()
-        let range = selectedRange(from: element)
-        let pasteboard = NSPasteboard.general
-        let saved = PasteboardSnapshot.capture(from: pasteboard)
-
-        sendCommandKey(CGKeyCode(kVK_ANSI_A))
-        try? await Task.sleep(for: .milliseconds(70))
-        sendCommandKey(CGKeyCode(kVK_ANSI_C))
-        try? await Task.sleep(for: .milliseconds(140))
-
-        let captureChangeCount = pasteboard.changeCount
-        let captured = pasteboard.string(forType: .string)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        saved.restore(to: pasteboard, ifCurrentChangeCount: captureChangeCount)
-
-        if let element, let range {
-            var restoredRange = range
-            if let rangeValue = AXValueCreate(.cfRange, &restoredRange) {
-                AXUIElementSetAttributeValue(
-                    element,
-                    kAXSelectedTextRangeAttribute as CFString,
-                    rangeValue
-                )
-            }
-        }
-
-        guard let captured, captured.count >= 40 else { return nil }
-        return String(captured.suffix(30_000))
     }
 
     private func activeWindowConversationText(

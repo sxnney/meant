@@ -77,6 +77,12 @@ struct IntelligenceOverlayView: View {
                 Color.clear
             case .acknowledging:
                 MaterialTrace(label: viewModel.progressMessage)
+            case .choosingContext:
+                contextChoice
+            case .waitingForContext(let message):
+                contextWaiting(message)
+            case .contextCaptured:
+                messageSurface("Context captured · refining now", symbol: "checkmark")
             case .transforming:
                 MaterialTrace(label: viewModel.progressMessage)
             case .preview(let action):
@@ -88,6 +94,59 @@ struct IntelligenceOverlayView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var contextChoice: some View {
+        HStack(spacing: 14) {
+            Label("Prompt captured", systemImage: "checkmark")
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(MeantDesign.graphite.opacity(0.68))
+                .lineLimit(1)
+
+            Spacer(minLength: 8)
+
+            actionHint(key: "↩", label: "Refine now", primary: true)
+            actionHint(key: "⌘I", label: "Add context", primary: false)
+        }
+        .padding(.horizontal, 15)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .refractedSurface()
+    }
+
+    private func contextWaiting(_ message: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "text.badge.plus")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(MeantDesign.graphite.opacity(0.72))
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Waiting for context")
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(MeantDesign.graphite)
+                Text(message)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(MeantDesign.graphite.opacity(0.58))
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 8)
+            Text("Esc cancels")
+                .font(.system(size: 9.5, weight: .medium))
+                .foregroundStyle(MeantDesign.graphite.opacity(0.42))
+        }
+        .padding(.horizontal, 15)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .refractedSurface()
+    }
+
+    private func actionHint(key: String, label: String, primary: Bool) -> some View {
+        HStack(spacing: 5) {
+            Text(key)
+                .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+            Text(label)
+                .font(.system(size: 10.5, weight: primary ? .semibold : .medium))
+        }
+        .foregroundStyle(MeantDesign.graphite.opacity(primary ? 0.82 : 0.56))
     }
 
     private func preview(_ action: InferredAction) -> some View {
@@ -126,7 +185,7 @@ struct IntelligenceOverlayView: View {
                     .padding(.vertical, 10)
             }
 
-            Divider().opacity(0.45).padding(.horizontal, 12)
+            Divider().opacity(0.35).padding(.horizontal, 15)
 
             HStack(spacing: 18) {
                 Button { viewModel.copyPreview() } label: {
@@ -160,7 +219,8 @@ struct IntelligenceOverlayView: View {
                 .lineLimit(1)
             Spacer(minLength: 4)
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, 15)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .refractedSurface()
     }
 
@@ -179,7 +239,8 @@ struct IntelligenceOverlayView: View {
             }
             Spacer(minLength: 4)
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, 15)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .refractedSurface()
     }
 }
@@ -249,34 +310,16 @@ private struct MaterialTrace: View {
 private struct RefractedSurfaceModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
             .background {
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(.ultraThinMaterial)
-                .overlay(MeantDesign.materialTint.opacity(0.46))
+                .fill(.thinMaterial)
+                .overlay(MeantDesign.materialTint.opacity(0.34))
             }
             .overlay {
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
                     .stroke(MeantDesign.graphite.opacity(0.10), lineWidth: 0.8)
             }
-            .shadow(color: MeantDesign.graphite.opacity(0.10), radius: 14, y: 6)
-    }
-}
-
-private struct ActionShardSurfaceModifier: ViewModifier {
-    let selected: Bool
-
-    func body(content: Content) -> some View {
-        content
-            .background {
-                RoundedRectangle(cornerRadius: 13, style: .continuous)
-                .fill(.ultraThinMaterial)
-                .overlay(selected ? MeantDesign.accent.opacity(0.055) : MeantDesign.materialTint.opacity(0.42))
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: 13, style: .continuous)
-                    .stroke(selected ? MeantDesign.accent.opacity(0.30) : MeantDesign.graphite.opacity(0.08), lineWidth: 0.8)
-            }
-            .shadow(color: MeantDesign.graphite.opacity(selected ? 0.09 : 0.045), radius: 7, y: 3)
     }
 }
 
@@ -285,14 +328,11 @@ private extension View {
         modifier(RefractedSurfaceModifier())
     }
 
-    func actionShardSurface(selected: Bool) -> some View {
-        modifier(ActionShardSurfaceModifier(selected: selected))
-    }
-
     func softControl() -> some View {
         self
             .padding(.horizontal, 10)
             .frame(height: 25)
             .background(MeantDesign.graphite.opacity(0.055), in: Capsule())
     }
+
 }

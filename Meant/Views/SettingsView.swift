@@ -77,14 +77,7 @@ struct SettingsView: View {
                 if let error = viewModel.shortcutError {
                     Text(error).foregroundStyle(MeantDesign.graphite)
                 }
-                LabeledContent("Capture page context") {
-                    ShortcutRecorder(shortcut: contextShortcutBinding)
-                        .frame(width: 138, height: 30)
-                }
-                if let error = viewModel.contextShortcutError {
-                    Text(error).foregroundStyle(MeantDesign.graphite)
-                }
-                Text("Meant reads reliable context from the active window. If a page does not expose enough, focus the page and capture it before refining. Captured context is used once.")
+                Text("Press the shortcut once to capture the prompt. Press it again to add context, select the supporting text, then press Return. Escape is the only cancel action.")
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
             }
@@ -159,12 +152,6 @@ struct SettingsView: View {
         )
     }
 
-    private var contextShortcutBinding: Binding<GlobalShortcut> {
-        Binding(
-            get: { viewModel.preferences.contextShortcut },
-            set: { viewModel.preferences.contextShortcut = $0 }
-        )
-    }
 }
 
 private struct ShortcutRecorder: NSViewRepresentable {

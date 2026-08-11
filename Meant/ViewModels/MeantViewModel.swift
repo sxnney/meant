@@ -13,6 +13,9 @@ final class MeantViewModel: ObservableObject {
     enum OverlayState: Equatable {
         case hidden
         case acknowledging
+        case choosingContext
+        case waitingForContext(String)
+        case contextCaptured
         case transforming(InferredAction)
         case preview(InferredAction)
         case noSelection(String)
@@ -33,12 +36,10 @@ final class MeantViewModel: ObservableObject {
     @Published private(set) var connectionError: String?
     @Published private(set) var isAccessibilityTrusted = false
     @Published var shortcutError: String?
-    @Published var contextShortcutError: String?
 
     let preferences: AppPreferences
     let loginItem = LoginItemController()
     var onDismiss: (() -> Void)?
-    var onYieldFocus: (() -> Void)?
 
     private let selection: SelectionController
     private let codex: CodexAppServerClient
@@ -47,7 +48,6 @@ final class MeantViewModel: ObservableObject {
     private var dismissTask: Task<Void, Never>?
     private var interactionID = UUID()
     private var sourceContext = ""
-    private var pendingExplicitContext: String?
     private var previousProgressMessage: String?
 
     private static let progressMessages = [
@@ -116,18 +116,7 @@ final class MeantViewModel: ObservableObject {
             guard interactionID == id, !Task.isCancelled else { return }
             snapshot = captured
             sourceText = captured.text
-            let explicitContext = pendingExplicitContext
-            sourceContext = [
-                captured.surroundingContext,
-                explicitContext.map { "Explicitly captured page context:\n\($0)" } ?? ""
-            ]
-            .filter { !$0.isEmpty }
-            .joined(separator: "\n\n")
-            if explicitContext != nil {
-                contextLabel = "Captured context"
-            } else if captured.surroundingContext.contains("Current window context:") {
-                contextLabel = "Window context"
-            }
+            sourceContext = captured.surroundingContext
             selectionBounds = captured.selectionBounds
             isAccessibilityTrusted = selection.isTrusted
 
@@ -144,34 +133,58 @@ final class MeantViewModel: ObservableObject {
                 scheduleDismiss(after: .seconds(2.2), interactionID: id)
                 return
             }
-            pendingExplicitContext = nil
-
-            await ensureConnection()
-            guard interactionID == id, !Task.isCancelled else { return }
-            guard account != nil else {
-                overlayState = .failed("Sign in with ChatGPT in Meant Settings")
-                return
-            }
-
-            transform(using: Self.refinementAction)
+            overlayState = .choosingContext
         }
     }
 
     func captureContextForNextRefinement() {
-        stopCurrentWork()
-        interactionID = UUID()
+        guard case .waitingForContext = overlayState else { return }
+        dismissTask?.cancel()
         let id = interactionID
-        overlayState = .hidden
         workTask = Task {
-            let captured = await selection.captureEntireFocusedSurface()
+            let captured = await selection.capture()
             guard interactionID == id, !Task.isCancelled else { return }
-            if let captured {
-                pendingExplicitContext = captured
-                overlayState = .noSelection("Context saved for your next refinement")
-            } else {
-                overlayState = .failed("This app did not provide page context")
+            guard captured.hasSelection else {
+                overlayState = .waitingForContext("No text selected. Select context, then press Return")
+                return
             }
-            scheduleDismiss(after: .seconds(2.2), interactionID: id)
+            sourceContext = [sourceContext, "Supporting context selected by the user:\n\(captured.text)"]
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n\n")
+            contextLabel = "Context included"
+            overlayState = .contextCaptured
+            try? await Task.sleep(for: .milliseconds(420))
+            guard interactionID == id, !Task.isCancelled else { return }
+            startRefinement()
+        }
+    }
+
+    func refineNow() {
+        guard case .choosingContext = overlayState else { return }
+        startRefinement()
+    }
+
+    func requestContext() {
+        guard case .choosingContext = overlayState, let snapshot else { return }
+        dismissTask?.cancel()
+        overlayState = .waitingForContext("Select supporting text, then press Return")
+        selection.restoreApplication(from: snapshot)
+    }
+
+    func handleRepeatedRefineShortcut() -> Bool {
+        switch overlayState {
+        case .choosingContext:
+            requestContext()
+            return true
+        case .waitingForContext:
+            guard let snapshot else { return true }
+            overlayState = .waitingForContext(
+                "Select supporting text, then press Return"
+            )
+            selection.restoreApplication(from: snapshot)
+            return true
+        default:
+            return false
         }
     }
 
@@ -200,6 +213,10 @@ final class MeantViewModel: ObservableObject {
         onDismiss?()
     }
 
+    func handleOutsideClick() {
+        // Focus changes never cancel an interaction. Escape is the explicit cancel action.
+    }
+
     func handleKey(code: CGKeyCode, flags: CGEventFlags) -> Bool {
         if code == CGKeyCode(kVK_Escape) {
             cancelInteraction()
@@ -207,6 +224,22 @@ final class MeantViewModel: ObservableObject {
         }
 
         switch overlayState {
+        case .choosingContext:
+            if code == CGKeyCode(kVK_Return) || code == CGKeyCode(kVK_ANSI_KeypadEnter) {
+                refineNow()
+                return true
+            }
+            if code == CGKeyCode(kVK_ANSI_I), flags.contains(.maskCommand) {
+                requestContext()
+                return true
+            }
+
+        case .waitingForContext:
+            if code == CGKeyCode(kVK_Return) || code == CGKeyCode(kVK_ANSI_KeypadEnter) {
+                captureContextForNextRefinement()
+                return true
+            }
+
         case .preview:
             if code == CGKeyCode(kVK_Return) || code == CGKeyCode(kVK_ANSI_KeypadEnter) {
                 copyPreview()
@@ -339,6 +372,20 @@ final class MeantViewModel: ObservableObject {
                 isStreaming = false
                 overlayState = .failed(readable(error))
             }
+        }
+    }
+
+    private func startRefinement() {
+        let id = interactionID
+        overlayState = .acknowledging
+        workTask = Task {
+            await ensureConnection()
+            guard interactionID == id, !Task.isCancelled else { return }
+            guard account != nil else {
+                overlayState = .failed("Sign in with ChatGPT in Meant Settings")
+                return
+            }
+            transform(using: Self.refinementAction)
         }
     }
 
