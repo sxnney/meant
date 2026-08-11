@@ -1,0 +1,13 @@
+.DS_Store
+.build/
+DerivedData/
+.derived*/
+.*-derived*/
+.release-derived/
+.signed-derived/
+.test-derived*/
+.publish-derived/
+.personal-release-derived/
+dist/
+xcuserdata/
+*.xcuserstate
