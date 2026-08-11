@@ -117,7 +117,7 @@ final class IntelligenceOverlayController {
             if case .waitingForContext = state {
                 inputMonitor.startPassiveContextCapture()
             } else {
-                inputMonitor.stop()
+                inputMonitor.startPassiveCancellationCapture()
             }
         } else {
             beginInputCaptureAfterShortcut()
@@ -361,6 +361,7 @@ private final class OverlayInputMonitor {
     private var globalKeyMonitor: Any?
     private var passiveEventTap: CFMachPort?
     private var passiveRunLoopSource: CFRunLoopSource?
+    private var passiveCapturesReturn = false
     private let keyHandler: (CGKeyCode, CGEventFlags) -> Bool
     private let outsideClickHandler: () -> Void
 
@@ -401,7 +402,16 @@ private final class OverlayInputMonitor {
     }
 
     func startPassiveContextCapture() {
+        startPassiveCapture(capturesReturn: true)
+    }
+
+    func startPassiveCancellationCapture() {
+        startPassiveCapture(capturesReturn: false)
+    }
+
+    private func startPassiveCapture(capturesReturn: Bool) {
         stop()
+        passiveCapturesReturn = capturesReturn
         let mask = CGEventMask(1) << CGEventType.keyDown.rawValue
         if let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
@@ -414,9 +424,9 @@ private final class OverlayInputMonitor {
                 }
                 let monitor = Unmanaged<OverlayInputMonitor>.fromOpaque(userInfo).takeUnretainedValue()
                 let code = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
-                guard code == CGKeyCode(kVK_Return)
-                        || code == CGKeyCode(kVK_ANSI_KeypadEnter)
-                        || code == CGKeyCode(kVK_Escape) else {
+                let isReturn = code == CGKeyCode(kVK_Return)
+                    || code == CGKeyCode(kVK_ANSI_KeypadEnter)
+                guard code == CGKeyCode(kVK_Escape) || (monitor.passiveCapturesReturn && isReturn) else {
                     return Unmanaged.passUnretained(event)
                 }
                 let flags = event.flags
@@ -436,9 +446,9 @@ private final class OverlayInputMonitor {
         }
 
         globalKeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard event.keyCode == UInt16(kVK_Return)
-                    || event.keyCode == UInt16(kVK_ANSI_KeypadEnter)
-                    || event.keyCode == UInt16(kVK_Escape) else { return }
+            let isReturn = event.keyCode == UInt16(kVK_Return)
+                || event.keyCode == UInt16(kVK_ANSI_KeypadEnter)
+            guard event.keyCode == UInt16(kVK_Escape) || (capturesReturn && isReturn) else { return }
             _ = self?.keyHandler(CGKeyCode(event.keyCode), event.cgEvent?.flags ?? [])
         }
     }

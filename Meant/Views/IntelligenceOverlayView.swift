@@ -329,16 +329,19 @@ private struct MaterialTrace: View {
                         .foregroundStyle(MeantDesign.graphite.opacity(0.42))
                         .contentTransition(.numericText())
                 }
+                .padding(.horizontal, 16)
                 .frame(height: 46)
 
                 if showsDetail {
-                    Divider().opacity(0.22)
+                    Divider()
+                        .opacity(0.22)
+                        .padding(.horizontal, 16)
                     VStack(alignment: .leading, spacing: 7) {
-                        progressRow("Prompt understood", complete: true)
-                        progressRow(hasContext ? "Supporting context included" : "Working from the selection", complete: true)
-                        progressRow("Refining the instruction", complete: false)
+                        progressRow("Prompt understood", active: false)
+                        progressRow(hasContext ? "Supporting context included" : "Working from the selection", active: false)
+                        progressRow("Refining the instruction", active: true)
                     }
-                    .padding(.horizontal, 14)
+                    .padding(.horizontal, 16)
                     .padding(.top, 10)
                     .transition(.opacity.combined(with: .move(edge: .top)))
                 }
@@ -355,21 +358,21 @@ private struct MaterialTrace: View {
         )
     }
 
-    private func progressRow(_ text: String, complete: Bool) -> some View {
+    private func progressRow(_ text: String, active: Bool) -> some View {
         HStack(spacing: 8) {
-            if complete {
-                Image(systemName: "checkmark")
-                    .font(.system(size: 8.5, weight: .bold))
-                    .foregroundStyle(MeantDesign.graphite.opacity(0.42))
-                    .frame(width: 12)
-            } else {
+            if active {
                 ProgressView()
                     .controlSize(.mini)
+                    .frame(width: 12)
+            } else {
+                Circle()
+                    .fill(MeantDesign.graphite.opacity(0.24))
+                    .frame(width: 5, height: 5)
                     .frame(width: 12)
             }
             Text(text)
                 .font(.system(size: 10.5, weight: .medium, design: .rounded))
-                .foregroundStyle(MeantDesign.graphite.opacity(complete ? 0.46 : 0.72))
+                .foregroundStyle(MeantDesign.graphite.opacity(active ? 0.72 : 0.46))
         }
     }
 
