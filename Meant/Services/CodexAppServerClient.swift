@@ -27,6 +27,22 @@ struct CodexModel: Sendable, Equatable {
     }
 }
 
+struct CodexConversationContext: Sendable, Equatable {
+    let title: String?
+    let workingDirectory: String?
+    let transcript: String
+
+    var promptContext: String {
+        var parts = ["Recent Codex conversation:"]
+        if let title, !title.isEmpty { parts.append("Thread: \(title)") }
+        if let workingDirectory, !workingDirectory.isEmpty {
+            parts.append("Working directory: \(workingDirectory)")
+        }
+        parts.append(transcript)
+        return parts.joined(separator: "\n")
+    }
+}
+
 enum CodexClientError: LocalizedError {
     case executableNotFound
     case serverStopped(String)
@@ -205,6 +221,84 @@ final class CodexAppServerClient: @unchecked Sendable {
         )
     }
 
+    func recentConversationContext(windowTitle: String?) async throws -> CodexConversationContext? {
+        try await connect()
+        let result = try await request(
+            method: "thread/list",
+            params: [
+                "limit": 12,
+                "sortKey": "recency_at",
+                "sortDirection": "desc",
+                "archived": false
+            ]
+        )
+        let threads = result["data"] as? [JSON] ?? []
+        guard let thread = bestContextThread(from: threads, windowTitle: windowTitle),
+              let threadID = thread["id"] as? String else { return nil }
+
+        let readResult = try await request(
+            method: "thread/read",
+            params: ["threadId": threadID, "includeTurns": true]
+        )
+        guard let fullThread = readResult["thread"] as? JSON else { return nil }
+        let transcript = recentTranscript(from: fullThread)
+        guard !transcript.isEmpty else { return nil }
+        return CodexConversationContext(
+            title: fullThread["name"] as? String,
+            workingDirectory: fullThread["cwd"] as? String,
+            transcript: transcript
+        )
+    }
+
+    private func bestContextThread(from threads: [JSON], windowTitle: String?) -> JSON? {
+        let meaningfulTitle = windowTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let meaningfulTitle,
+           !meaningfulTitle.isEmpty,
+           !["Codex", "ChatGPT"].contains(meaningfulTitle),
+           let match = threads.first(where: {
+               guard let name = $0["name"] as? String else { return false }
+               return meaningfulTitle.localizedCaseInsensitiveContains(name)
+                   || name.localizedCaseInsensitiveContains(meaningfulTitle)
+           }) {
+            return match
+        }
+        return threads.first
+    }
+
+    private func recentTranscript(from thread: JSON) -> String {
+        let turns = thread["turns"] as? [JSON] ?? []
+        var messages: [String] = []
+        for turn in turns {
+            for item in turn["items"] as? [JSON] ?? [] {
+                switch item["type"] as? String {
+                case "userMessage":
+                    let text = (item["content"] as? [JSON] ?? [])
+                        .filter { $0["type"] as? String == "text" }
+                        .compactMap { $0["text"] as? String }
+                        .joined(separator: "\n")
+                    if !text.isEmpty { messages.append("User: \(text)") }
+                case "agentMessage":
+                    if let text = item["text"] as? String, !text.isEmpty {
+                        messages.append("Assistant: \(text)")
+                    }
+                default:
+                    break
+                }
+            }
+        }
+
+        var selected: [String] = []
+        var characterCount = 0
+        for message in messages.reversed() {
+            let remaining = 18_000 - characterCount
+            guard remaining > 0 else { break }
+            let value = message.count > remaining ? String(message.suffix(remaining)) : message
+            selected.append(value)
+            characterCount += value.count
+        }
+        return selected.reversed().joined(separator: "\n\n")
+    }
+
     private enum ModelPreference {
         case sol
     }
@@ -343,7 +437,7 @@ final class CodexAppServerClient: @unchecked Sendable {
                     "clientInfo": [
                         "name": "meant_macos",
                         "title": "Meant",
-                        "version": "1.0.0"
+                        "version": "1.1.0"
                     ]
                 ]
             ) { [weak self] result in

@@ -129,8 +129,26 @@ final class MeantViewModel: ObservableObject {
                 return
             }
 
+            if isCodex(captured.application),
+               let conversation = try? await codex.recentConversationContext(windowTitle: captured.windowTitle) {
+                sourceContext = [sourceContext, conversation.promptContext]
+                    .filter { !$0.isEmpty }
+                    .joined(separator: "\n\n")
+            }
+            guard interactionID == id, !Task.isCancelled else { return }
+
             transform(using: Self.refinementAction)
         }
+    }
+
+    private func isCodex(_ application: NSRunningApplication?) -> Bool {
+        guard let application else { return false }
+        let bundleIdentifier = application.bundleIdentifier?.lowercased() ?? ""
+        let name = application.localizedName?.lowercased() ?? ""
+        return bundleIdentifier.contains("openai.codex")
+            || bundleIdentifier == "com.openai.chat"
+            || name == "codex"
+            || name == "chatgpt"
     }
 
     func copyPreview() {

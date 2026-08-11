@@ -19,6 +19,7 @@ final class SelectionController {
         let selectionAppearsPresent: Bool
         let method: CaptureMethod
         let surroundingContext: String
+        let windowTitle: String?
 
         var hasSelection: Bool {
             !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -59,7 +60,8 @@ final class SelectionController {
                 selectionBounds: selectedBounds(from: element),
                 selectionAppearsPresent: true,
                 method: .accessibility,
-                surroundingContext: context(for: element, application: application, selection: text)
+                surroundingContext: context(for: element, application: application, selection: text),
+                windowTitle: focusedWindowTitle(for: application)
             )
         }
 
@@ -72,7 +74,8 @@ final class SelectionController {
                 selectionBounds: nil,
                 selectionAppearsPresent: selectionAppearsPresent,
                 method: .none,
-                surroundingContext: context(for: element, application: application, selection: "")
+                surroundingContext: context(for: element, application: application, selection: ""),
+                windowTitle: focusedWindowTitle(for: application)
             )
         }
 
@@ -93,8 +96,29 @@ final class SelectionController {
             selectionBounds: selectedBounds(from: element),
             selectionAppearsPresent: selectionAppearsPresent || !text.isEmpty,
             method: text.isEmpty ? .none : .clipboard,
-            surroundingContext: context(for: element, application: application, selection: text)
+            surroundingContext: context(for: element, application: application, selection: text),
+            windowTitle: focusedWindowTitle(for: application)
         )
+    }
+
+    private func focusedWindowTitle(for application: NSRunningApplication?) -> String? {
+        guard let application else { return nil }
+        let appElement = AXUIElementCreateApplication(application.processIdentifier)
+        var windowValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            appElement,
+            kAXFocusedWindowAttribute as CFString,
+            &windowValue
+        ) == .success,
+        let windowValue else { return nil }
+
+        var titleValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            windowValue as! AXUIElement,
+            kAXTitleAttribute as CFString,
+            &titleValue
+        ) == .success else { return nil }
+        return titleValue as? String
     }
 
     private func context(
