@@ -57,7 +57,12 @@ final class IntelligenceOverlayController {
 
         viewModel.$overlayState
             .removeDuplicates()
-            .sink { [weak self] state in self?.render(state) }
+            .sink { [weak self] state in
+                DispatchQueue.main.async {
+                    guard let self, self.viewModel.overlayState == state else { return }
+                    self.render(state)
+                }
+            }
             .store(in: &cancellables)
 
     }
@@ -93,13 +98,8 @@ final class IntelligenceOverlayController {
         }
         applyFrame(size: size, animated: wasVisible)
         if !wasVisible {
-            panel.alphaValue = 0
+            panel.alphaValue = 1
             panel.orderFrontRegardless()
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = reduceMotion ? 0 : 0.1
-                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                panel.animator().alphaValue = 1
-            }
         }
         if case .waitingForContext = state {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
