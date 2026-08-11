@@ -243,14 +243,10 @@ final class IntelligenceOverlayController {
         let maximumWidth = min(Metrics.maximumWidth, safe.width)
 
         guard let anchor else {
-            let x = safe.midX - maximumWidth / 2
-            let top = safe.maxY - Metrics.fallbackTopInset
-            return PlacementSession(
-                edge: .fallback,
+            return makeFallbackPlacementSession(
+                point: fallbackPoint,
                 safeFrame: safe,
-                maximumHeight: top - safe.minY,
-                fixedX: x,
-                fixedY: top
+                maximumWidth: maximumWidth
             )
         }
 
@@ -258,14 +254,10 @@ final class IntelligenceOverlayController {
         let belowSpace = anchor.finalLineBounds.minY - safe.minY - gap
         let aboveSpace = safe.maxY - anchor.finalLineBounds.maxY - gap
         guard max(belowSpace, aboveSpace) >= Metrics.singleLineHeight else {
-            let x = safe.midX - maximumWidth / 2
-            let top = safe.maxY - Metrics.fallbackTopInset
-            return PlacementSession(
-                edge: .fallback,
+            return makeFallbackPlacementSession(
+                point: anchor.finalLineBounds.center,
                 safeFrame: safe,
-                maximumHeight: top - safe.minY,
-                fixedX: x,
-                fixedY: top
+                maximumWidth: maximumWidth
             )
         }
 
@@ -292,6 +284,42 @@ final class IntelligenceOverlayController {
             maximumHeight: aboveSpace,
             fixedX: stableX,
             fixedY: anchor.finalLineBounds.maxY + gap
+        )
+    }
+
+    private func makeFallbackPlacementSession(
+        point: NSPoint,
+        safeFrame: NSRect,
+        maximumWidth: CGFloat
+    ) -> PlacementSession {
+        let point = NSPoint(
+            x: clamp(point.x, minimum: safeFrame.minX, maximum: safeFrame.maxX),
+            y: clamp(point.y, minimum: safeFrame.minY, maximum: safeFrame.maxY)
+        )
+        let belowSpace = point.y - safeFrame.minY - Metrics.anchorGap
+        let aboveSpace = safeFrame.maxY - point.y - Metrics.anchorGap
+        let x = clamp(
+            point.x - Metrics.anchorInset,
+            minimum: safeFrame.minX,
+            maximum: safeFrame.maxX - maximumWidth
+        )
+        let useBelow = belowSpace >= Metrics.minimumExpandedHeight
+            || (aboveSpace < Metrics.minimumExpandedHeight && belowSpace >= aboveSpace)
+        if useBelow {
+            return PlacementSession(
+                edge: .fallback,
+                safeFrame: safeFrame,
+                maximumHeight: max(Metrics.singleLineHeight, belowSpace),
+                fixedX: x,
+                fixedY: point.y - Metrics.anchorGap
+            )
+        }
+        return PlacementSession(
+            edge: .above,
+            safeFrame: safeFrame,
+            maximumHeight: max(Metrics.singleLineHeight, aboveSpace),
+            fixedX: x,
+            fixedY: point.y + Metrics.anchorGap
         )
     }
 
@@ -358,7 +386,6 @@ final class IntelligenceOverlayController {
         static let screenMargin: CGFloat = 12
         static let anchorGap: CGFloat = 10
         static let anchorInset: CGFloat = 24
-        static let fallbackTopInset: CGFloat = 36
     }
 
     private var previewHeight: CGFloat {
@@ -399,6 +426,10 @@ final class IntelligenceOverlayController {
         inputCaptureWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: workItem)
     }
+}
+
+private extension NSRect {
+    var center: NSPoint { NSPoint(x: midX, y: midY) }
 }
 
 private final class TransparentHostingView<Content: View>: NSHostingView<Content> {
