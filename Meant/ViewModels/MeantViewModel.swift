@@ -45,7 +45,9 @@ final class MeantViewModel: ObservableObject {
     private let selection: SelectionController
     private let codex: CodexAppServerClient
     private var snapshot: SelectionController.Snapshot?
+    private var detectedContext: SelectionController.Snapshot?
     private var workTask: Task<Void, Never>?
+    private var contextDetectionTask: Task<Void, Never>?
     private var dismissTask: Task<Void, Never>?
     private var interactionID = UUID()
     private var sourceContext = ""
@@ -97,6 +99,7 @@ final class MeantViewModel: ObservableObject {
         deliveryState = .pending
         selectionGeometry = nil
         snapshot = nil
+        detectedContext = nil
         sourceContext = ""
         contextLabel = nil
         contextPreview = nil
@@ -141,7 +144,12 @@ final class MeantViewModel: ObservableObject {
         dismissTask?.cancel()
         let id = interactionID
         workTask = Task {
-            let captured = await selection.capture()
+            let captured: SelectionController.Snapshot
+            if let detectedContext {
+                captured = detectedContext
+            } else {
+                captured = await selection.capture()
+            }
             guard interactionID == id, !Task.isCancelled else { return }
             guard captured.hasSelection else {
                 overlayState = .waitingForContext("No text selected. Select context, then press Return")
@@ -153,10 +161,38 @@ final class MeantViewModel: ObservableObject {
             let trimmed = captured.text.trimmingCharacters(in: .whitespacesAndNewlines)
             contextLabel = "Context · \(trimmed.count.formatted()) characters"
             contextPreview = String(trimmed.prefix(180))
+            detectedContext = nil
             overlayState = .contextCaptured
             try? await Task.sleep(for: .milliseconds(420))
             guard interactionID == id, !Task.isCancelled else { return }
             startRefinement()
+        }
+    }
+
+    func detectContextSelection() {
+        guard case .choosingContext = overlayState else { return }
+        contextDetectionTask?.cancel()
+        let id = interactionID
+        let original = normalizedSelection(sourceText)
+        contextDetectionTask = Task {
+            try? await Task.sleep(for: .milliseconds(120))
+            guard !Task.isCancelled, interactionID == id else { return }
+            let first = await selection.capture()
+            let firstText = normalizedSelection(first.text)
+            guard isMeaningfulContext(firstText, distinctFrom: original) else { return }
+
+            try? await Task.sleep(for: .milliseconds(140))
+            guard !Task.isCancelled, interactionID == id else { return }
+            let second = await selection.capture()
+            let secondText = normalizedSelection(second.text)
+            guard firstText == secondText else { return }
+
+            detectedContext = second
+            let words = secondText.split(whereSeparator: { $0.isWhitespace }).count
+            let count = words == 1 ? "1 word" : "\(words.formatted()) words"
+            contextLabel = "Context · \(count)"
+            contextPreview = String(secondText.prefix(180))
+            overlayState = .waitingForContext("Context detected · \(count) · press Return")
         }
     }
 
@@ -165,24 +201,9 @@ final class MeantViewModel: ObservableObject {
         startRefinement()
     }
 
-    func requestContext() {
-        guard case .choosingContext = overlayState, let snapshot else { return }
-        dismissTask?.cancel()
-        overlayState = .waitingForContext("Select supporting text, then press Return")
-        selection.restoreApplication(from: snapshot)
-    }
-
     func handleRepeatedRefineShortcut() -> Bool {
         switch overlayState {
-        case .choosingContext:
-            requestContext()
-            return true
-        case .waitingForContext:
-            guard let snapshot else { return true }
-            overlayState = .waitingForContext(
-                "Select supporting text, then press Return"
-            )
-            selection.restoreApplication(from: snapshot)
+        case .choosingContext, .waitingForContext:
             return true
         default:
             return false
@@ -250,11 +271,6 @@ final class MeantViewModel: ObservableObject {
                 refineNow()
                 return true
             }
-            if code == CGKeyCode(kVK_ANSI_I), flags.contains(.maskCommand) {
-                requestContext()
-                return true
-            }
-
         case .waitingForContext:
             if code == CGKeyCode(kVK_Return) || code == CGKeyCode(kVK_ANSI_KeypadEnter) {
                 captureContextForNextRefinement()
@@ -426,11 +442,22 @@ final class MeantViewModel: ObservableObject {
     private func stopCurrentWork(keepState: Bool = false) {
         workTask?.cancel()
         workTask = nil
+        contextDetectionTask?.cancel()
+        contextDetectionTask = nil
         dismissTask?.cancel()
         dismissTask = nil
         codex.cancelAllTurns()
         isStreaming = false
         if !keepState { resultText = "" }
+    }
+
+    private func normalizedSelection(_ text: String) -> String {
+        text.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+    }
+
+    private func isMeaningfulContext(_ text: String, distinctFrom original: String) -> Bool {
+        text.count >= 2 && text != original
     }
 
     private func readable(_ error: Error) -> String {

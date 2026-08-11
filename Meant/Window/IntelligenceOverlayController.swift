@@ -33,6 +33,11 @@ final class IntelligenceOverlayController {
                 guard let panel, panel.isVisible,
                       !panel.frame.contains(NSEvent.mouseLocation) else { return }
                 viewModel?.handleOutsideClick()
+            },
+            selectionFinishedHandler: { [weak panel, weak viewModel] in
+                guard let panel, panel.isVisible,
+                      !panel.frame.contains(NSEvent.mouseLocation) else { return }
+                viewModel?.detectContextSelection()
             }
         )
 
@@ -451,15 +456,18 @@ private final class OverlayInputMonitor {
     private var passiveCapturesReturn = false
     private let keyHandler: (CGKeyCode, CGEventFlags) -> Bool
     private let outsideClickHandler: () -> Void
+    private let selectionFinishedHandler: () -> Void
 
     var isStarted: Bool { localKeyMonitor != nil }
 
     init(
         keyHandler: @escaping (CGKeyCode, CGEventFlags) -> Bool,
-        outsideClickHandler: @escaping () -> Void
+        outsideClickHandler: @escaping () -> Void,
+        selectionFinishedHandler: @escaping () -> Void
     ) {
         self.keyHandler = keyHandler
         self.outsideClickHandler = outsideClickHandler
+        self.selectionFinishedHandler = selectionFinishedHandler
     }
 
     func start() {
@@ -482,8 +490,15 @@ private final class OverlayInputMonitor {
             }
         }
         if globalMouseMonitor == nil {
-            globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
-                self?.outsideClickHandler()
+            globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(
+                matching: [.leftMouseDown, .rightMouseDown, .leftMouseUp]
+            ) { [weak self] event in
+                guard let self else { return }
+                if event.type == .leftMouseUp {
+                    self.selectionFinishedHandler()
+                } else {
+                    self.outsideClickHandler()
+                }
             }
         }
     }

@@ -139,7 +139,7 @@ struct IntelligenceOverlayView: View {
             Spacer(minLength: 8)
 
             actionHint(key: "↩", label: "Refine now", primary: true)
-            actionHint(key: "⌘I", label: "Add context", primary: false)
+            actionHint(key: "select text", label: "Add context", primary: false)
         }
         .padding(.horizontal, 15)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -153,7 +153,7 @@ struct IntelligenceOverlayView: View {
                 .foregroundStyle(MeantDesign.graphite.opacity(0.72))
 
             VStack(alignment: .leading, spacing: 3) {
-                Text("Waiting for context")
+                Text(viewModel.contextLabel == nil ? "Waiting for context" : "Context detected")
                     .font(.system(size: 11.5, weight: .semibold))
                     .foregroundStyle(MeantDesign.graphite)
                 Text(message)
