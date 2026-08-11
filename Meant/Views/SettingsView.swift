@@ -56,7 +56,7 @@ struct SettingsView: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.large)
-                Text("Accessibility lets Meant read the text you select in other apps. Refined text is copied to your clipboard.")
+                Text("Accessibility lets Meant read and replace selected text. If an app blocks replacement, Meant copies the result instead.")
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
 
@@ -77,7 +77,7 @@ struct SettingsView: View {
                 if let error = viewModel.shortcutError {
                     Text(error).foregroundStyle(MeantDesign.graphite)
                 }
-                Text("Use the shortcut to refine and strengthen the selected prompt. The result is copied automatically.")
+                Text("Use the shortcut to refine the selected prompt. Meant replaces it when possible and otherwise copies it.")
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
             }
@@ -126,7 +126,7 @@ struct SettingsView: View {
             }
 
             Section("How it works") {
-                Text("Meant uses GPT-5.6 Sol to refine the selected prompt, strengthen its emphasis, and place the result on the clipboard. It uses low reasoning effort with tools disabled.")
+                Text("Meant uses GPT-5.6 Sol to refine the selected prompt and strengthen its emphasis. It replaces the selection when possible, with a clipboard fallback. It uses low reasoning effort with tools disabled.")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
             }

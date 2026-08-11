@@ -97,7 +97,10 @@ struct IntelligenceOverlayView: View {
                     .font(.system(size: 12, weight: .semibold, design: .rounded))
                     .foregroundStyle(MeantDesign.graphite.opacity(0.72))
                 Spacer()
-                Label("Copied", systemImage: "checkmark")
+                Label(
+                    viewModel.deliveryState == .replaced ? "Replaced" : "Copied",
+                    systemImage: "checkmark"
+                )
                     .font(.system(size: 10, weight: .semibold, design: .rounded))
                     .foregroundStyle(MeantDesign.accent)
                     .padding(.horizontal, 9)
@@ -121,7 +124,12 @@ struct IntelligenceOverlayView: View {
             Divider().opacity(0.45).padding(.horizontal, 12)
 
             HStack(spacing: 18) {
-                Button { viewModel.copyPreview() } label: { Label("Copy again", systemImage: "doc.on.doc") }
+                Button { viewModel.copyPreview() } label: {
+                    Label(
+                        viewModel.deliveryState == .copied ? "Copy again" : "Copy",
+                        systemImage: "doc.on.doc"
+                    )
+                }
                     .softControl()
                 Spacer()
                 Button { viewModel.cancelInteraction() } label: { Text("Close") }

@@ -3,6 +3,15 @@
     <channel>
         <title>Meant</title>
         <item>
+            <title>1.3.0</title>
+            <pubDate>Tue, 11 Aug 2026 20:27:42 +0400</pubDate>
+            <sparkle:version>4</sparkle:version>
+            <sparkle:shortVersionString>1.3.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/sxnney/meant/releases/download/v1.3.0/Meant.zip" length="2611398" type="application/octet-stream" sparkle:edSignature="UiGltiDyty+IsOS6SXQdq6ZCJuoNt/xXooy6qETvxWidki5BcLWURBb8dvVBPvx5oG42had7iuiSJgjecA86Cw=="/>
+        </item>
+        <item>
             <title>1.2.0</title>
             <pubDate>Tue, 11 Aug 2026 20:25:58 +0400</pubDate>
             <sparkle:version>3</sparkle:version>
@@ -19,16 +28,6 @@
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
             <enclosure url="https://github.com/sxnney/meant/releases/download/v1.1.0/Meant.zip" length="2601354" type="application/octet-stream" sparkle:edSignature="yLKsINYa8/0WxirUmpmwvxUA8umEqoQcCoT0VF/Wn0UNPc8aNlmZ/uiCPx0gkGunkwwSOXRv7nxW0sZzx7vdAw=="/>
-        </item>
-        <item>
-            <title>1.0.0</title>
-            <pubDate>Tue, 11 Aug 2026 20:03:30 +0400</pubDate>
-            <link>https://github.com/sxnney/meant</link>
-            <sparkle:version>1</sparkle:version>
-            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://github.com/sxnney/meant/releases/download/v1.0.0/Meant.zip" length="2595939" type="application/octet-stream" sparkle:edSignature="QNoOOLEQVeX8Wg2MQ8HUcJcXSjMJw25iOBVd946QIBImjp8s0fiOL9GJhgX8omzwvBh4G9wvY/Z9eGmOBsWvDQ=="/>
         </item>
     </channel>
 </rss>

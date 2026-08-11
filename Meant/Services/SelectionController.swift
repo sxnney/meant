@@ -26,7 +26,7 @@ final class SelectionController {
         }
     }
 
-    enum ReplacementResult {
+    enum ReplacementResult: Equatable {
         case replaced
         case copied
     }

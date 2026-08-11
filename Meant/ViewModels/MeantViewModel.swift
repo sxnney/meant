@@ -4,6 +4,12 @@ import Combine
 
 @MainActor
 final class MeantViewModel: ObservableObject {
+    enum DeliveryState: Equatable {
+        case pending
+        case replaced
+        case copied
+    }
+
     enum OverlayState: Equatable {
         case hidden
         case acknowledging
@@ -18,6 +24,7 @@ final class MeantViewModel: ObservableObject {
     @Published private(set) var resultText = ""
     @Published private(set) var selectionBounds: CGRect?
     @Published private(set) var isStreaming = false
+    @Published private(set) var deliveryState: DeliveryState = .pending
     @Published private(set) var progressMessage = "Refining your prompt"
     @Published private(set) var account: CodexAccount?
     @Published private(set) var model: CodexModel?
@@ -83,6 +90,7 @@ final class MeantViewModel: ObservableObject {
         let id = interactionID
         sourceText = ""
         resultText = ""
+        deliveryState = .pending
         selectionBounds = nil
         snapshot = nil
         sourceContext = ""
@@ -154,6 +162,7 @@ final class MeantViewModel: ObservableObject {
     func copyPreview() {
         guard case .preview = overlayState, !isStreaming, !resultText.isEmpty else { return }
         selection.copy(resultText)
+        deliveryState = .copied
         scheduleDismiss(after: .seconds(3), interactionID: interactionID)
     }
 
@@ -283,6 +292,7 @@ final class MeantViewModel: ObservableObject {
         interactionID = id
         stopCurrentWork(keepState: true)
         resultText = ""
+        deliveryState = .pending
         isStreaming = true
         overlayState = .transforming(action)
         let source = sourceText
@@ -300,7 +310,9 @@ final class MeantViewModel: ObservableObject {
                     overlayState = .failed("Codex returned an empty result")
                     return
                 }
-                selection.copy(resultText)
+                let delivery = await selection.replace(with: resultText, using: snapshot)
+                guard interactionID == id, !Task.isCancelled else { return }
+                deliveryState = delivery == .replaced ? .replaced : .copied
                 overlayState = .preview(action)
                 scheduleDismiss(after: .seconds(6), interactionID: id)
             } catch is CancellationError {
