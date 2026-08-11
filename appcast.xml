@@ -9,7 +9,7 @@
             <sparkle:shortVersionString>1.4.0</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://github.com/sxnney/meant/releases/download/v1.4.0/Meant.zip" length="2617514" type="application/octet-stream" sparkle:edSignature="2S/J0UEPcHhHeOeM5CGXV3BfGsGFlKG/id2SNThKSqj7jX08zBByZ/3WjVN7CSk2EDlcZN+f5ynN3APQ9oPYCw=="/>
+            <enclosure url="https://github.com/sxnney/meant/releases/download/v1.4.0/Meant.zip" length="2617545" type="application/octet-stream" sparkle:edSignature="z/GIztJQ2KRKgtG1Tdcl+7v44FCQDd62+9OBg1+fxsjR19rkJx5pmgdHDtyAdkDRSxS1e2ikjoQYfbnvQKLxDg=="/>
         </item>
         <item>
             <title>1.3.0</title>

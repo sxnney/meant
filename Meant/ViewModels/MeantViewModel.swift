@@ -161,8 +161,7 @@ final class MeantViewModel: ObservableObject {
         stopCurrentWork()
         interactionID = UUID()
         let id = interactionID
-        overlayState = .acknowledging
-        progressMessage = "Capturing this page"
+        overlayState = .hidden
         workTask = Task {
             let captured = await selection.captureEntireFocusedSurface()
             guard interactionID == id, !Task.isCancelled else { return }
