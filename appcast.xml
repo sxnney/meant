@@ -3,6 +3,15 @@
     <channel>
         <title>Meant</title>
         <item>
+            <title>1.6.0</title>
+            <pubDate>Wed, 12 Aug 2026 01:55:06 +0400</pubDate>
+            <sparkle:version>7</sparkle:version>
+            <sparkle:shortVersionString>1.6.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/sxnney/meant/releases/download/v1.6.0/Meant.zip" length="2701084" type="application/octet-stream" sparkle:edSignature="uCXw4UVdKoxitOK17SdyVmj/5ezJ3tqC6Zs16b5jEh1dJ2lbZGp2rf+dCg5sCxRJ6WTTQCjq1Lyw4WVKq56kAQ=="/>
+        </item>
+        <item>
             <title>1.5.0</title>
             <pubDate>Tue, 11 Aug 2026 22:08:29 +0400</pubDate>
             <sparkle:version>6</sparkle:version>
