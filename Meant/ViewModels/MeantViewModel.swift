@@ -25,12 +25,11 @@ final class MeantViewModel: ObservableObject {
     @Published private(set) var overlayState: OverlayState = .hidden
     @Published private(set) var sourceText = ""
     @Published private(set) var resultText = ""
-    @Published private(set) var selectionBounds: CGRect?
+    @Published private(set) var selectionGeometry: SelectionController.SelectionGeometry?
     @Published private(set) var isStreaming = false
     @Published private(set) var deliveryState: DeliveryState = .pending
     @Published private(set) var contextLabel: String?
     @Published private(set) var contextPreview: String?
-    @Published private(set) var showsProgressDetail = false
     @Published private(set) var progressMessage = "Refining your prompt"
     @Published private(set) var account: CodexAccount?
     @Published private(set) var model: CodexModel?
@@ -48,7 +47,6 @@ final class MeantViewModel: ObservableObject {
     private var snapshot: SelectionController.Snapshot?
     private var workTask: Task<Void, Never>?
     private var dismissTask: Task<Void, Never>?
-    private var progressDetailTask: Task<Void, Never>?
     private var interactionID = UUID()
     private var sourceContext = ""
     private var previousProgressMessage: String?
@@ -97,14 +95,12 @@ final class MeantViewModel: ObservableObject {
         sourceText = ""
         resultText = ""
         deliveryState = .pending
-        selectionBounds = nil
+        selectionGeometry = nil
         snapshot = nil
         sourceContext = ""
         contextLabel = nil
         contextPreview = nil
-        showsProgressDetail = false
         chooseProgressMessage()
-        overlayState = .acknowledging
 
         isAccessibilityTrusted = selection.isTrusted
         guard isAccessibilityTrusted else {
@@ -120,7 +116,7 @@ final class MeantViewModel: ObservableObject {
             snapshot = captured
             sourceText = captured.text
             sourceContext = captured.surroundingContext
-            selectionBounds = captured.selectionBounds
+            selectionGeometry = captured.selectionGeometry
             isAccessibilityTrusted = selection.isTrusted
 
             guard captured.hasSelection else {
@@ -372,18 +368,9 @@ final class MeantViewModel: ObservableObject {
         resultText = ""
         deliveryState = .pending
         isStreaming = true
-        showsProgressDetail = false
         overlayState = .transforming(action)
         let source = sourceText
         let context = sourceContext
-
-        progressDetailTask?.cancel()
-        progressDetailTask = Task {
-            try? await Task.sleep(for: .seconds(4))
-            guard !Task.isCancelled, self.interactionID == id,
-                  case .transforming = self.overlayState else { return }
-            self.showsProgressDetail = true
-        }
 
         workTask = Task {
             do {
@@ -393,8 +380,6 @@ final class MeantViewModel: ObservableObject {
                 }
                 guard interactionID == id, !Task.isCancelled else { return }
                 isStreaming = false
-                progressDetailTask?.cancel()
-                showsProgressDetail = false
                 guard !resultText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                     overlayState = .failed("Codex returned an empty result")
                     return
@@ -410,8 +395,6 @@ final class MeantViewModel: ObservableObject {
             } catch {
                 guard interactionID == id else { return }
                 isStreaming = false
-                progressDetailTask?.cancel()
-                showsProgressDetail = false
                 overlayState = .failed(readable(error))
             }
         }
@@ -445,11 +428,8 @@ final class MeantViewModel: ObservableObject {
         workTask = nil
         dismissTask?.cancel()
         dismissTask = nil
-        progressDetailTask?.cancel()
-        progressDetailTask = nil
         codex.cancelAllTurns()
         isStreaming = false
-        showsProgressDetail = false
         if !keepState { resultText = "" }
     }
 

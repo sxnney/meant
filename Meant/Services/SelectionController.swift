@@ -4,6 +4,11 @@ import Carbon.HIToolbox
 
 @MainActor
 final class SelectionController {
+    struct SelectionGeometry: Equatable {
+        let bounds: CGRect
+        let finalLineBounds: CGRect
+    }
+
     private struct WindowTextCandidate {
         let text: String
         let area: CGFloat
@@ -20,7 +25,7 @@ final class SelectionController {
         let application: NSRunningApplication?
         let focusedElement: AXUIElement?
         let selectedRange: CFRange?
-        let selectionBounds: CGRect?
+        let selectionGeometry: SelectionGeometry?
         let selectionAppearsPresent: Bool
         let method: CaptureMethod
         let surroundingContext: String
@@ -62,7 +67,7 @@ final class SelectionController {
                 application: application,
                 focusedElement: element,
                 selectedRange: selectedRange(from: element),
-                selectionBounds: selectedBounds(from: element),
+                selectionGeometry: selectedGeometry(from: element),
                 selectionAppearsPresent: true,
                 method: .accessibility,
                 surroundingContext: context(for: element, application: application, selection: text),
@@ -76,7 +81,7 @@ final class SelectionController {
                 application: application,
                 focusedElement: element,
                 selectedRange: selectedRange(from: element),
-                selectionBounds: nil,
+                selectionGeometry: nil,
                 selectionAppearsPresent: selectionAppearsPresent,
                 method: .none,
                 surroundingContext: context(for: element, application: application, selection: ""),
@@ -98,7 +103,7 @@ final class SelectionController {
             application: application,
             focusedElement: element,
             selectedRange: selectedRange(from: element),
-            selectionBounds: selectedBounds(from: element),
+            selectionGeometry: selectedGeometry(from: element),
             selectionAppearsPresent: selectionAppearsPresent || !text.isEmpty,
             method: text.isEmpty ? .none : .clipboard,
             surroundingContext: context(for: element, application: application, selection: text),
@@ -416,7 +421,7 @@ final class SelectionController {
         return value as? String
     }
 
-    private func selectedBounds(from element: AXUIElement?) -> CGRect? {
+    private func selectedGeometry(from element: AXUIElement?) -> SelectionGeometry? {
         guard let element else { return nil }
         var rangeValue: CFTypeRef?
         guard AXUIElementCopyAttributeValue(
@@ -425,6 +430,33 @@ final class SelectionController {
             &rangeValue
         ) == .success, let rangeValue else { return nil }
 
+        guard let selectionBounds = rect(for: rangeValue, in: element) else { return nil }
+
+        var selectedRange = CFRange()
+        let rangeAXValue = rangeValue as! AXValue
+        guard AXValueGetType(rangeAXValue) == .cfRange,
+              AXValueGetValue(rangeAXValue, .cfRange, &selectedRange) else {
+            return SelectionGeometry(bounds: selectionBounds, finalLineBounds: selectionBounds)
+        }
+
+        var finalLineBounds = selectionBounds
+        if selectedRange.length > 0 {
+            for offset in 1...min(8, selectedRange.length) {
+                var tailRange = CFRange(
+                    location: selectedRange.location + selectedRange.length - offset,
+                    length: 1
+                )
+                guard let tailValue = AXValueCreate(.cfRange, &tailRange) else { continue }
+                if let tailBounds = rect(for: tailValue, in: element) {
+                    finalLineBounds = tailBounds
+                    break
+                }
+            }
+        }
+        return SelectionGeometry(bounds: selectionBounds, finalLineBounds: finalLineBounds)
+    }
+
+    private func rect(for rangeValue: CFTypeRef, in element: AXUIElement) -> CGRect? {
         var boundsValue: CFTypeRef?
         guard AXUIElementCopyParameterizedAttributeValue(
             element,

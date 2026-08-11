@@ -9,9 +9,9 @@ final class IntelligenceOverlayController {
     private let panel: IntelligencePanel
     private let viewModel: MeantViewModel
     private let inputMonitor: OverlayInputMonitor
-    private var anchorPoint = NSEvent.mouseLocation
-    private var selectionRect: NSRect?
-    private var placementSide: PlacementSide?
+    private var fallbackPoint = NSEvent.mouseLocation
+    private var pendingAnchor: SelectionAnchor?
+    private var placementSession: PlacementSession?
     private var cancellables = Set<AnyCancellable>()
     private var inputCaptureWorkItem: DispatchWorkItem?
     private var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
@@ -50,8 +50,8 @@ final class IntelligenceOverlayController {
 
         viewModel.onDismiss = { [weak self] in self?.hide() }
 
-        viewModel.$selectionBounds
-            .sink { [weak self] bounds in self?.updateSelectionAnchor(bounds) }
+        viewModel.$selectionGeometry
+            .sink { [weak self] geometry in self?.captureSelectionAnchor(geometry) }
             .store(in: &cancellables)
 
         viewModel.$overlayState
@@ -59,13 +59,6 @@ final class IntelligenceOverlayController {
             .sink { [weak self] state in self?.render(state) }
             .store(in: &cancellables)
 
-        viewModel.$showsProgressDetail
-            .removeDuplicates()
-            .sink { [weak self] _ in
-                guard let self, self.viewModel.isVisible else { return }
-                self.position(size: self.preferredSize(for: self.viewModel.overlayState), animated: true)
-            }
-            .store(in: &cancellables)
     }
 
     func invoke() {
@@ -74,9 +67,9 @@ final class IntelligenceOverlayController {
             viewModel.cancelInteraction()
             return
         }
-        anchorPoint = NSEvent.mouseLocation
-        selectionRect = nil
-        placementSide = nil
+        fallbackPoint = NSEvent.mouseLocation
+        pendingAnchor = nil
+        placementSession = nil
         viewModel.beginInvocation()
     }
 
@@ -93,7 +86,10 @@ final class IntelligenceOverlayController {
         let wasVisible = panel.isVisible
         let size = preferredSize(for: state)
         panel.ignoresMouseEvents = !stateAcceptsPointer(state)
-        position(size: size, animated: wasVisible)
+        if placementSession == nil {
+            placementSession = makePlacementSession(anchor: pendingAnchor)
+        }
+        applyFrame(size: size, animated: wasVisible)
         if !wasVisible {
             panel.contentView = makeHostingView()
             applyPanelMask()
@@ -168,41 +164,196 @@ final class IntelligenceOverlayController {
         }
     }
 
-    private func updateSelectionAnchor(_ bounds: CGRect?) {
-        guard let bounds else { return }
-        let mainTop = NSScreen.screens.first?.frame.maxY ?? 0
-        let converted = NSRect(
-            x: bounds.minX,
-            y: mainTop - bounds.maxY,
-            width: bounds.width,
-            height: bounds.height
+    private struct SelectionAnchor {
+        let bounds: NSRect
+        let finalLineBounds: NSRect
+        let screen: NSScreen
+    }
+
+    private struct PlacementSession {
+        let side: PlacementSide
+        let safeFrame: NSRect
+        let maximumSize: NSSize
+        let fixedX: CGFloat
+        let fixedY: CGFloat
+    }
+
+    private enum PlacementSide {
+        case below
+        case above
+        case right
+        case left
+        case fallback
+    }
+
+    private func captureSelectionAnchor(_ geometry: SelectionController.SelectionGeometry?) {
+        guard placementSession == nil, let geometry else { return }
+        let primaryTop = NSScreen.screens.first(where: { $0.frame.origin == .zero })?.frame.maxY
+            ?? NSScreen.screens.first?.frame.maxY
+            ?? 0
+        let bounds = convertAccessibilityRect(geometry.bounds, primaryTop: primaryTop)
+        let tail = convertAccessibilityRect(geometry.finalLineBounds, primaryTop: primaryTop)
+        guard let screen = screen(containingMostOf: bounds) else { return }
+        let normalizedBounds = normalize(bounds, scale: screen.backingScaleFactor)
+        let normalizedTail = normalize(tail, scale: screen.backingScaleFactor)
+        guard normalizedBounds.width > 0, normalizedBounds.height > 0 else { return }
+        pendingAnchor = SelectionAnchor(
+            bounds: normalizedBounds,
+            finalLineBounds: normalizedTail,
+            screen: screen
         )
-        selectionRect = NSScreen.screens.contains(where: { $0.frame.intersects(converted) }) ? converted : nil
-        placementSide = nil
-        if viewModel.isVisible {
-            position(size: preferredSize(for: viewModel.overlayState), animated: true)
+    }
+
+    private func convertAccessibilityRect(_ rect: CGRect, primaryTop: CGFloat) -> NSRect {
+        NSRect(x: rect.minX, y: primaryTop - rect.maxY, width: rect.width, height: rect.height)
+    }
+
+    private func normalize(_ rect: NSRect, scale: CGFloat) -> NSRect {
+        let unit = max(1, scale)
+        func snapped(_ value: CGFloat) -> CGFloat { (value * unit).rounded() / unit }
+        return NSRect(
+            x: snapped(rect.minX),
+            y: snapped(rect.minY),
+            width: max(1 / unit, snapped(rect.width)),
+            height: max(1 / unit, snapped(rect.height))
+        )
+    }
+
+    private func screen(containingMostOf rect: NSRect) -> NSScreen? {
+        guard let screen = NSScreen.screens.max(by: { first, second in
+            intersectionArea(first.frame, rect) < intersectionArea(second.frame, rect)
+        }), intersectionArea(screen.frame, rect) > 0 else { return nil }
+        return screen
+    }
+
+    private func intersectionArea(_ first: NSRect, _ second: NSRect) -> CGFloat {
+        let intersection = first.intersection(second)
+        return intersection.isNull ? 0 : intersection.width * intersection.height
+    }
+
+    private func makePlacementSession(anchor: SelectionAnchor?) -> PlacementSession? {
+        guard let screen = anchor?.screen ?? fallbackScreen(), !screen.visibleFrame.isEmpty else { return nil }
+        let safe = screen.visibleFrame.insetBy(dx: Metrics.screenMargin, dy: Metrics.screenMargin)
+        let reference = NSSize(
+            width: min(Metrics.maximumWidth, safe.width),
+            height: min(Metrics.minimumStableHeight, safe.height)
+        )
+
+        guard let anchor else {
+            let x = safe.midX - reference.width / 2
+            let top = safe.maxY - Metrics.fallbackTopInset
+            return PlacementSession(
+                side: .fallback,
+                safeFrame: safe,
+                maximumSize: NSSize(width: safe.width, height: top - safe.minY),
+                fixedX: x,
+                fixedY: top
+            )
+        }
+
+        let gap = Metrics.anchorGap
+        let belowSpace = anchor.bounds.minY - safe.minY - gap
+        let aboveSpace = safe.maxY - anchor.bounds.maxY - gap
+        let rightSpace = safe.maxX - anchor.bounds.maxX - gap
+        let leftSpace = anchor.bounds.minX - safe.minX - gap
+        let side: PlacementSide
+        if belowSpace >= reference.height {
+            side = .below
+        } else if aboveSpace >= reference.height {
+            side = .above
+        } else if rightSpace >= reference.width {
+            side = .right
+        } else if leftSpace >= reference.width {
+            side = .left
+        } else {
+            side = belowSpace >= aboveSpace ? .below : .above
+        }
+
+        let selectionEndX = anchor.finalLineBounds.maxX
+        let stableX = clamp(
+            selectionEndX - Metrics.anchorInset,
+            minimum: safe.minX,
+            maximum: safe.maxX - reference.width
+        )
+        let stableY = clamp(
+            anchor.finalLineBounds.midY - min(Metrics.maximumHeight, safe.height) / 2,
+            minimum: safe.minY,
+            maximum: safe.maxY - min(Metrics.maximumHeight, safe.height)
+        )
+
+        switch side {
+        case .below:
+            let top = min(anchor.bounds.minY - gap, safe.maxY)
+            return PlacementSession(
+                side: side,
+                safeFrame: safe,
+                maximumSize: NSSize(width: safe.width, height: max(Metrics.singleLineHeight, top - safe.minY)),
+                fixedX: stableX,
+                fixedY: top
+            )
+        case .above:
+            let bottom = max(anchor.bounds.maxY + gap, safe.minY)
+            return PlacementSession(
+                side: side,
+                safeFrame: safe,
+                maximumSize: NSSize(width: safe.width, height: max(Metrics.singleLineHeight, safe.maxY - bottom)),
+                fixedX: stableX,
+                fixedY: bottom
+            )
+        case .right:
+            let left = clamp(
+                anchor.bounds.maxX + gap,
+                minimum: safe.minX,
+                maximum: safe.maxX - reference.width
+            )
+            return PlacementSession(
+                side: side,
+                safeFrame: safe,
+                maximumSize: NSSize(width: max(Metrics.singleLineHeight, safe.maxX - left), height: safe.height),
+                fixedX: left,
+                fixedY: stableY
+            )
+        case .left:
+            let right = clamp(
+                anchor.bounds.minX - gap,
+                minimum: safe.minX + reference.width,
+                maximum: safe.maxX
+            )
+            return PlacementSession(
+                side: side,
+                safeFrame: safe,
+                maximumSize: NSSize(width: max(Metrics.singleLineHeight, right - safe.minX), height: safe.height),
+                fixedX: right,
+                fixedY: stableY
+            )
+        case .fallback:
+            return nil
         }
     }
 
-    private func position(size: NSSize, animated: Bool) {
-        let screen = targetScreen() ?? NSScreen.main
-        guard let visible = screen?.visibleFrame else { return }
+    private func fallbackScreen() -> NSScreen? {
+        NSScreen.screens.first(where: { NSMouseInRect(fallbackPoint, $0.frame, false) }) ?? NSScreen.main
+    }
 
-        let anchor = selectionRect ?? NSRect(x: anchorPoint.x, y: anchorPoint.y, width: 1, height: 1)
-        let bestSide = bestPlacement(for: size, anchor: anchor, visible: visible)
-        if let current = placementSide {
-            let safe = visible.insetBy(dx: 10, dy: 10)
-            let currentCost = placementCost(current, size: size, anchor: anchor, safe: safe)
-            let bestCost = placementCost(bestSide, size: size, anchor: anchor, safe: safe)
-            if currentCost > bestCost + 18 { placementSide = bestSide }
-        } else {
-            placementSide = bestSide
+    private func applyFrame(size: NSSize, animated: Bool) {
+        guard let placementSession else { return }
+        let safe = placementSession.safeFrame
+        let fittedSize = NSSize(
+            width: min(size.width, placementSession.maximumSize.width),
+            height: min(size.height, placementSession.maximumSize.height)
+        )
+        var origin: NSPoint
+        switch placementSession.side {
+        case .below, .fallback:
+            origin = NSPoint(x: placementSession.fixedX, y: placementSession.fixedY - fittedSize.height)
+        case .above, .right:
+            origin = NSPoint(x: placementSession.fixedX, y: placementSession.fixedY)
+        case .left:
+            origin = NSPoint(x: placementSession.fixedX - fittedSize.width, y: placementSession.fixedY)
         }
-        var origin = origin(for: placementSide ?? .below, size: size, anchor: anchor)
-
-        origin.x = min(max(origin.x, visible.minX + 8), visible.maxX - size.width - 8)
-        origin.y = min(max(origin.y, visible.minY + 8), visible.maxY - size.height - 8)
-        let frame = NSRect(origin: origin, size: size)
+        origin.x = clamp(origin.x, minimum: safe.minX, maximum: safe.maxX - fittedSize.width)
+        origin.y = clamp(origin.y, minimum: safe.minY, maximum: safe.maxY - fittedSize.height)
+        let frame = NSRect(origin: origin, size: fittedSize)
 
         if animated {
             NSAnimationContext.runAnimationGroup { context in
@@ -217,55 +368,8 @@ final class IntelligenceOverlayController {
         }
     }
 
-    private enum PlacementSide: CaseIterable {
-        case below
-        case above
-        case right
-        case left
-    }
-
-    private func bestPlacement(for size: NSSize, anchor: NSRect, visible: NSRect) -> PlacementSide {
-        let safe = visible.insetBy(dx: 10, dy: 10)
-        return PlacementSide.allCases.min { left, right in
-            placementCost(left, size: size, anchor: anchor, safe: safe)
-                < placementCost(right, size: size, anchor: anchor, safe: safe)
-        } ?? .below
-    }
-
-    private func placementCost(_ side: PlacementSide, size: NSSize, anchor: NSRect, safe: NSRect) -> CGFloat {
-        let proposed = origin(for: side, size: size, anchor: anchor)
-        let clamped = NSPoint(
-            x: min(max(proposed.x, safe.minX), safe.maxX - size.width),
-            y: min(max(proposed.y, safe.minY), safe.maxY - size.height)
-        )
-        let displacement = hypot(clamped.x - proposed.x, clamped.y - proposed.y)
-        let frame = NSRect(origin: clamped, size: size)
-        let overlap = frame.intersection(anchor)
-        let overlapArea = overlap.isNull ? 0 : overlap.width * overlap.height
-        let preference: CGFloat = side == .below ? 0 : side == .above ? 2 : 5
-        return displacement * 8 + overlapArea * 20 + preference
-    }
-
-    private func origin(for side: PlacementSide, size: NSSize, anchor: NSRect) -> NSPoint {
-        let gap: CGFloat = 12
-        switch side {
-        case .below:
-            return NSPoint(x: anchor.midX - size.width / 2, y: anchor.minY - size.height - gap)
-        case .above:
-            return NSPoint(x: anchor.midX - size.width / 2, y: anchor.maxY + gap)
-        case .right:
-            return NSPoint(x: anchor.maxX + gap, y: anchor.midY - size.height / 2)
-        case .left:
-            return NSPoint(x: anchor.minX - size.width - gap, y: anchor.midY - size.height / 2)
-        }
-    }
-
-    private func targetScreen() -> NSScreen? {
-        if let selectionRect,
-           let match = NSScreen.screens.first(where: { $0.frame.intersects(selectionRect) }) {
-            return match
-        }
-        return NSScreen.screens.first(where: { NSMouseInRect(anchorPoint, $0.frame, false) }) ?? NSScreen.main
+    private func clamp(_ value: CGFloat, minimum: CGFloat, maximum: CGFloat) -> CGFloat {
+        min(max(value, minimum), max(minimum, maximum))
     }
 
     private func preferredSize(for state: MeantViewModel.OverlayState) -> NSSize {
@@ -275,10 +379,7 @@ final class IntelligenceOverlayController {
         case .choosingContext: NSSize(width: 430, height: Metrics.choiceHeight)
         case .waitingForContext: NSSize(width: 440, height: Metrics.twoLineHeight)
         case .contextCaptured: NSSize(width: 270, height: Metrics.singleLineHeight)
-        case .transforming:
-            viewModel.showsProgressDetail
-                ? NSSize(width: 330, height: Metrics.progressHeight)
-                : NSSize(width: 300, height: Metrics.singleLineHeight)
+        case .transforming: NSSize(width: 300, height: Metrics.singleLineHeight)
         case .preview:
             NSSize(width: 440, height: previewHeight)
         case .noSelection: NSSize(width: 280, height: Metrics.singleLineHeight)
@@ -290,7 +391,13 @@ final class IntelligenceOverlayController {
         static let singleLineHeight: CGFloat = 46
         static let choiceHeight: CGFloat = 52
         static let twoLineHeight: CGFloat = 64
-        static let progressHeight: CGFloat = 126
+        static let maximumWidth: CGFloat = 440
+        static let maximumHeight: CGFloat = 460
+        static let minimumStableHeight: CGFloat = 220
+        static let screenMargin: CGFloat = 12
+        static let anchorGap: CGFloat = 10
+        static let anchorInset: CGFloat = 24
+        static let fallbackTopInset: CGFloat = 36
     }
 
     private var previewHeight: CGFloat {

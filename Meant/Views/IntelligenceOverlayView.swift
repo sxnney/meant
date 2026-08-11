@@ -104,11 +104,7 @@ struct IntelligenceOverlayView: View {
             case .contextCaptured:
                 messageSurface(viewModel.contextLabel ?? "Context captured", symbol: "checkmark")
             case .transforming:
-                MaterialTrace(
-                    label: viewModel.progressMessage,
-                    showsDetail: viewModel.showsProgressDetail,
-                    hasContext: viewModel.contextLabel != nil
-                )
+                MaterialTrace(label: viewModel.progressMessage)
             case .preview(let action):
                 preview(action)
             case .noSelection(let message):
@@ -126,7 +122,7 @@ struct IntelligenceOverlayView: View {
         case .choosingContext: "choosingContext"
         case .waitingForContext: "waitingForContext"
         case .contextCaptured: "contextCaptured"
-        case .transforming: viewModel.showsProgressDetail ? "transformingDetail" : "transforming"
+        case .transforming: "transforming"
         case .preview: "preview"
         case .noSelection: "message"
         case .failed: "failed"
@@ -300,8 +296,6 @@ struct IntelligenceOverlayView: View {
 
 private struct MaterialTrace: View {
     let label: String
-    var showsDetail = false
-    var hasContext = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var startedAt = Date()
 
@@ -314,66 +308,27 @@ private struct MaterialTrace: View {
     var body: some View {
         TimelineView(.periodic(from: .now, by: 0.05)) { timeline in
             let elapsed = max(0, timeline.date.timeIntervalSince(startedAt))
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: 10) {
-                    PixelWave(elapsed: elapsed, delays: cellDelays, reduceMotion: reduceMotion)
+            HStack(spacing: 10) {
+                PixelWave(elapsed: elapsed, delays: cellDelays, reduceMotion: reduceMotion)
 
-                    shimmeringLabel(elapsed: elapsed)
-                        .lineLimit(1)
+                shimmeringLabel(elapsed: elapsed)
+                    .lineLimit(1)
 
-                    Spacer(minLength: 2)
+                Spacer(minLength: 2)
 
-                    Text(elapsedLabel(elapsed))
-                        .font(.system(size: 10.5, weight: .medium, design: .monospaced))
-                        .monospacedDigit()
-                        .foregroundStyle(MeantDesign.graphite.opacity(0.42))
-                        .contentTransition(.numericText())
-                }
-                .padding(.horizontal, 16)
-                .frame(height: 46)
-
-                if showsDetail {
-                    Divider()
-                        .opacity(0.22)
-                        .padding(.horizontal, 16)
-                    VStack(alignment: .leading, spacing: 7) {
-                        progressRow("Prompt understood", active: false)
-                        progressRow(hasContext ? "Supporting context included" : "Working from the selection", active: false)
-                        progressRow("Refining the instruction", active: true)
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 10)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-                }
+                Text(elapsedLabel(elapsed))
+                    .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                    .monospacedDigit()
+                    .foregroundStyle(MeantDesign.graphite.opacity(0.42))
+                    .contentTransition(.numericText())
             }
+            .padding(.horizontal, 16)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .refractedSurface()
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("\(label), \(elapsedLabel(elapsed))")
         }
         .onAppear { startedAt = Date() }
-        .animation(
-            reduceMotion ? nil : .timingCurve(0.23, 1, 0.32, 1, duration: 0.32),
-            value: showsDetail
-        )
-    }
-
-    private func progressRow(_ text: String, active: Bool) -> some View {
-        HStack(spacing: 8) {
-            if active {
-                ProgressView()
-                    .controlSize(.mini)
-                    .frame(width: 12)
-            } else {
-                Circle()
-                    .fill(MeantDesign.graphite.opacity(0.24))
-                    .frame(width: 5, height: 5)
-                    .frame(width: 12)
-            }
-            Text(text)
-                .font(.system(size: 10.5, weight: .medium, design: .rounded))
-                .foregroundStyle(MeantDesign.graphite.opacity(active ? 0.72 : 0.46))
-        }
     }
 
     private func shimmeringLabel(elapsed: TimeInterval) -> some View {
