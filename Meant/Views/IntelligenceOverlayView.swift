@@ -139,7 +139,10 @@ struct IntelligenceOverlayView: View {
             Spacer(minLength: 8)
 
             actionHint(key: "↩", label: "Refine now", primary: true)
-            actionHint(key: "select text", label: "Add context", primary: false)
+            Text("or select supporting text")
+                .font(.system(size: 10.5, weight: .medium, design: .rounded))
+                .foregroundStyle(MeantDesign.graphite.opacity(0.52))
+                .lineLimit(1)
         }
         .padding(.horizontal, 15)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

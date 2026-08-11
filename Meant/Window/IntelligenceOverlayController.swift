@@ -409,11 +409,12 @@ final class IntelligenceOverlayController {
         }
         guard inputCaptureWorkItem == nil else { return }
 
+        inputMonitor.start()
+
         let workItem = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.inputCaptureWorkItem = nil
             guard self.viewModel.isVisible else { return }
-            self.inputMonitor.start()
             self.panel.makeKeyAndOrderFront(nil)
         }
         inputCaptureWorkItem = workItem
@@ -453,6 +454,8 @@ private final class OverlayInputMonitor {
     private var globalKeyMonitor: Any?
     private var passiveEventTap: CFMachPort?
     private var passiveRunLoopSource: CFRunLoopSource?
+    private var selectionObservationTimer: Timer?
+    private var leftButtonWasDown = false
     private var passiveCapturesReturn = false
     private let keyHandler: (CGKeyCode, CGEventFlags) -> Bool
     private let outsideClickHandler: () -> Void
@@ -500,6 +503,21 @@ private final class OverlayInputMonitor {
                     self.outsideClickHandler()
                 }
             }
+        }
+        startSelectionObservation()
+    }
+
+    private func startSelectionObservation() {
+        guard selectionObservationTimer == nil else { return }
+        leftButtonWasDown = CGEventSource.buttonState(.combinedSessionState, button: .left)
+        selectionObservationTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) {
+            [weak self] _ in
+            guard let self else { return }
+            let isDown = CGEventSource.buttonState(.combinedSessionState, button: .left)
+            if self.leftButtonWasDown && !isDown {
+                self.selectionFinishedHandler()
+            }
+            self.leftButtonWasDown = isDown
         }
     }
 
@@ -564,12 +582,15 @@ private final class OverlayInputMonitor {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), passiveRunLoopSource, .commonModes)
         }
         if let passiveEventTap { CFMachPortInvalidate(passiveEventTap) }
+        selectionObservationTimer?.invalidate()
         localKeyMonitor = nil
         localMouseMonitor = nil
         globalMouseMonitor = nil
         globalKeyMonitor = nil
         passiveRunLoopSource = nil
         passiveEventTap = nil
+        selectionObservationTimer = nil
+        leftButtonWasDown = false
     }
 
 }
