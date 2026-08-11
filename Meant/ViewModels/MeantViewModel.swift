@@ -103,9 +103,7 @@ final class MeantViewModel: ObservableObject {
 
         isAccessibilityTrusted = selection.isTrusted
         guard isAccessibilityTrusted else {
-            selection.requestAccess()
-            selection.openAccessibilitySettings()
-            overlayState = .noSelection("Enable Meant, then try again")
+            overlayState = .noSelection("Meant needs Selection Access · open Settings from the menu bar")
             scheduleDismiss(after: .seconds(2.8), interactionID: id)
             return
         }

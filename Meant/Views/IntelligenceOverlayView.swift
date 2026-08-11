@@ -248,62 +248,103 @@ struct IntelligenceOverlayView: View {
 private struct MaterialTrace: View {
     let label: String
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var startedAt = Date()
+
+    private let cellDelays: [TimeInterval] = [
+        0.09, 0.18, 0.27,
+        0.00, 0.09, 0.18,
+        0.09, 0.18, 0.27
+    ]
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 30)) { timeline in
-            let time = timeline.date.timeIntervalSinceReferenceDate
-            GeometryReader { geometry in
-                ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 17, style: .continuous)
-                        .fill(MeantDesign.accent)
+        TimelineView(.periodic(from: .now, by: 0.05)) { timeline in
+            let elapsed = max(0, timeline.date.timeIntervalSince(startedAt))
+            HStack(spacing: 10) {
+                PixelWave(elapsed: elapsed, delays: cellDelays, reduceMotion: reduceMotion)
 
-                    Canvas { context, size in
-                        let bandWidth = max(24, size.width * 0.28)
-                        let progress = reduceMotion ? 0.5 : time.truncatingRemainder(dividingBy: 1.15) / 1.15
-                        let x = CGFloat(progress) * (size.width + bandWidth) - bandWidth
-                        let band = Path(CGRect(x: x, y: 1, width: bandWidth, height: size.height - 2))
-                        context.fill(
-                            band,
-                            with: .linearGradient(
-                                Gradient(colors: [
-                                    .clear,
-                                    MeantDesign.onAccent.opacity(0.34),
-                                    .clear
-                                ]),
-                                startPoint: CGPoint(x: x, y: 0),
-                                endPoint: CGPoint(x: x + bandWidth, y: 0)
-                            )
-                        )
-                    }
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                shimmeringLabel(elapsed: elapsed)
+                    .lineLimit(1)
 
-                    HStack(spacing: 9) {
+                Spacer(minLength: 2)
+
+                Text(elapsedLabel(elapsed))
+                    .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                    .monospacedDigit()
+                    .foregroundStyle(MeantDesign.graphite.opacity(0.42))
+                    .contentTransition(.numericText())
+            }
+            .padding(.horizontal, 14)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .refractedSurface()
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(label), \(elapsedLabel(elapsed))")
+        }
+        .onAppear { startedAt = Date() }
+    }
+
+    private func shimmeringLabel(elapsed: TimeInterval) -> some View {
+        let phase = reduceMotion ? 0.5 : elapsed.truncatingRemainder(dividingBy: 1.4) / 1.4
+        return Text(label)
+            .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+            .foregroundStyle(MeantDesign.graphite.opacity(0.48))
+            .overlay {
+                if !reduceMotion {
+                    LinearGradient(
+                        colors: [
+                            MeantDesign.graphite.opacity(0.30),
+                            MeantDesign.graphite,
+                            MeantDesign.graphite.opacity(0.30)
+                        ],
+                        startPoint: UnitPoint(x: phase * 2 - 1, y: 0.5),
+                        endPoint: UnitPoint(x: phase * 2, y: 0.5)
+                    )
+                    .mask {
                         Text(label)
-                            .font(.system(size: 11, weight: .semibold, design: .rounded))
-                            .foregroundStyle(MeantDesign.onAccent)
-                            .lineLimit(1)
-
-                        Spacer(minLength: 8)
-
-                        HStack(spacing: 3) {
-                            ForEach(0..<3, id: \.self) { index in
-                                let wave = reduceMotion ? 0.65 : (sin(time * 4.2 - Double(index) * 0.9) + 1) / 2
-                                Circle()
-                                    .fill(MeantDesign.onAccent)
-                                    .frame(width: 3.5, height: 3.5)
-                                    .opacity(0.28 + wave * 0.66)
-                                    .scaleEffect(0.82 + wave * 0.18)
-                            }
-                        }
+                            .font(.system(size: 11.5, weight: .semibold, design: .rounded))
                     }
-                    .padding(.horizontal, 12)
                 }
-                .overlay {
-                    RoundedRectangle(cornerRadius: 17, style: .continuous)
-                    .stroke(MeantDesign.onAccent.opacity(0.22), lineWidth: 0.75)
+            }
+    }
+
+    private func elapsedLabel(_ elapsed: TimeInterval) -> String {
+        if elapsed < 60 {
+            return String(format: "%.1fs", elapsed)
+        }
+        let minutes = Int(elapsed) / 60
+        return String(format: "%dm %.1fs", minutes, elapsed.truncatingRemainder(dividingBy: 60))
+    }
+}
+
+private struct PixelWave: View {
+    let elapsed: TimeInterval
+    let delays: [TimeInterval]
+    let reduceMotion: Bool
+
+    var body: some View {
+        VStack(spacing: 1.5) {
+            ForEach(0..<3, id: \.self) { row in
+                HStack(spacing: 1.5) {
+                    ForEach(0..<3, id: \.self) { column in
+                        let index = row * 3 + column
+                        RoundedRectangle(cornerRadius: 1, style: .continuous)
+                            .fill(MeantDesign.graphite)
+                            .frame(width: 4, height: 4)
+                            .opacity(opacity(for: delays[index]))
+                    }
                 }
             }
         }
+        .frame(width: 15, height: 15)
+        .accessibilityHidden(true)
+    }
+
+    private func opacity(for delay: TimeInterval) -> Double {
+        guard !reduceMotion else { return 0.15 }
+        let duration = 0.65
+        var phase = (elapsed - delay).truncatingRemainder(dividingBy: duration)
+        if phase < 0 { phase += duration }
+        let pulse = pow(max(0, sin(.pi * phase / duration)), 5)
+        return 0.15 + pulse * 0.85
     }
 }
 

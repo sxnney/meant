@@ -257,11 +257,11 @@ final class IntelligenceOverlayController {
     private func preferredSize(for state: MeantViewModel.OverlayState) -> NSSize {
         switch state {
         case .hidden: NSSize(width: 1, height: 1)
-        case .acknowledging: NSSize(width: 240, height: Metrics.singleLineHeight)
+        case .acknowledging: NSSize(width: 300, height: Metrics.singleLineHeight)
         case .choosingContext: NSSize(width: 430, height: Metrics.choiceHeight)
         case .waitingForContext: NSSize(width: 440, height: Metrics.twoLineHeight)
         case .contextCaptured: NSSize(width: 270, height: Metrics.singleLineHeight)
-        case .transforming: NSSize(width: 280, height: Metrics.singleLineHeight)
+        case .transforming: NSSize(width: 300, height: Metrics.singleLineHeight)
         case .preview:
             NSSize(width: 440, height: previewHeight)
         case .noSelection: NSSize(width: 280, height: Metrics.singleLineHeight)
