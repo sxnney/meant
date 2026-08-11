@@ -115,7 +115,9 @@ final class IntelligenceOverlayController {
         if stateKeepsOriginalFocus(state) {
             inputCaptureWorkItem?.cancel()
             inputCaptureWorkItem = nil
-            if case .waitingForContext = state {
+            if case .choosingContext = state {
+                inputMonitor.startPassiveChoiceCapture()
+            } else if case .waitingForContext = state {
                 inputMonitor.startPassiveContextCapture()
             } else {
                 inputMonitor.startPassiveCancellationCapture()
@@ -395,7 +397,7 @@ final class IntelligenceOverlayController {
 
     private func stateKeepsOriginalFocus(_ state: MeantViewModel.OverlayState) -> Bool {
         switch state {
-        case .waitingForContext, .contextCaptured, .acknowledging, .transforming:
+        case .choosingContext, .waitingForContext, .contextCaptured, .acknowledging, .transforming:
             true
         default:
             false
@@ -457,6 +459,7 @@ private final class OverlayInputMonitor {
     private var selectionObservationTimer: Timer?
     private var leftButtonWasDown = false
     private var passiveCapturesReturn = false
+    private var passiveObservesSelectionChanges = false
     private let keyHandler: (CGKeyCode, CGEventFlags) -> Bool
     private let outsideClickHandler: () -> Void
     private let selectionFinishedHandler: () -> Void
@@ -521,35 +524,67 @@ private final class OverlayInputMonitor {
         }
     }
 
+    func startPassiveChoiceCapture() {
+        startPassiveCapture(capturesReturn: true, observesSelectionChanges: true)
+    }
+
     func startPassiveContextCapture() {
-        startPassiveCapture(capturesReturn: true)
+        startPassiveCapture(capturesReturn: true, observesSelectionChanges: false)
     }
 
     func startPassiveCancellationCapture() {
-        startPassiveCapture(capturesReturn: false)
+        startPassiveCapture(capturesReturn: false, observesSelectionChanges: false)
     }
 
-    private func startPassiveCapture(capturesReturn: Bool) {
+    private func startPassiveCapture(capturesReturn: Bool, observesSelectionChanges: Bool) {
         stop()
         passiveCapturesReturn = capturesReturn
-        let mask = CGEventMask(1) << CGEventType.keyDown.rawValue
+        passiveObservesSelectionChanges = observesSelectionChanges
+        let mask = (CGEventMask(1) << CGEventType.keyDown.rawValue)
+            | (CGEventMask(1) << CGEventType.leftMouseUp.rawValue)
         if let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
             place: .headInsertEventTap,
             options: .defaultTap,
             eventsOfInterest: mask,
             callback: { _, type, event, userInfo in
-                guard type == .keyDown, let userInfo else {
+                guard let userInfo else {
                     return Unmanaged.passUnretained(event)
                 }
                 let monitor = Unmanaged<OverlayInputMonitor>.fromOpaque(userInfo).takeUnretainedValue()
+                if type == .leftMouseUp {
+                    if monitor.passiveObservesSelectionChanges {
+                        DispatchQueue.main.async {
+                            monitor.selectionFinishedHandler()
+                        }
+                    }
+                    return Unmanaged.passUnretained(event)
+                }
+                guard type == .keyDown else { return Unmanaged.passUnretained(event) }
                 let code = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
+                let flags = event.flags
                 let isReturn = code == CGKeyCode(kVK_Return)
                     || code == CGKeyCode(kVK_ANSI_KeypadEnter)
+                let isCommandA = code == CGKeyCode(kVK_ANSI_A) && flags.contains(.maskCommand)
+                let isShiftSelection = flags.contains(.maskShift) && [
+                    CGKeyCode(kVK_LeftArrow),
+                    CGKeyCode(kVK_RightArrow),
+                    CGKeyCode(kVK_UpArrow),
+                    CGKeyCode(kVK_DownArrow),
+                    CGKeyCode(kVK_Home),
+                    CGKeyCode(kVK_End),
+                    CGKeyCode(kVK_PageUp),
+                    CGKeyCode(kVK_PageDown)
+                ].contains(code)
+                if monitor.passiveObservesSelectionChanges && (isCommandA || isShiftSelection) {
+                    DispatchQueue.main.async {
+                        monitor.selectionFinishedHandler()
+                    }
+                    return Unmanaged.passUnretained(event)
+                }
                 guard code == CGKeyCode(kVK_Escape) || (monitor.passiveCapturesReturn && isReturn) else {
                     return Unmanaged.passUnretained(event)
                 }
-                let flags = event.flags
                 DispatchQueue.main.async {
                     _ = monitor.keyHandler(code, flags)
                 }
@@ -562,15 +597,31 @@ private final class OverlayInputMonitor {
             passiveRunLoopSource = source
             CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
             CGEvent.tapEnable(tap: tap, enable: true)
+            if observesSelectionChanges { startSelectionObservation() }
             return
         }
 
         globalKeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self else { return }
+            let flags = event.cgEvent?.flags ?? []
+            let code = CGKeyCode(event.keyCode)
+            let isCommandA = code == CGKeyCode(kVK_ANSI_A) && flags.contains(.maskCommand)
+            let isShiftSelection = flags.contains(.maskShift) && [
+                CGKeyCode(kVK_LeftArrow),
+                CGKeyCode(kVK_RightArrow),
+                CGKeyCode(kVK_UpArrow),
+                CGKeyCode(kVK_DownArrow)
+            ].contains(code)
+            if observesSelectionChanges && (isCommandA || isShiftSelection) {
+                self.selectionFinishedHandler()
+                return
+            }
             let isReturn = event.keyCode == UInt16(kVK_Return)
                 || event.keyCode == UInt16(kVK_ANSI_KeypadEnter)
             guard event.keyCode == UInt16(kVK_Escape) || (capturesReturn && isReturn) else { return }
-            _ = self?.keyHandler(CGKeyCode(event.keyCode), event.cgEvent?.flags ?? [])
+            _ = self.keyHandler(code, flags)
         }
+        if observesSelectionChanges { startSelectionObservation() }
     }
 
     func stop() {
@@ -589,6 +640,7 @@ private final class OverlayInputMonitor {
         globalKeyMonitor = nil
         passiveRunLoopSource = nil
         passiveEventTap = nil
+        passiveObservesSelectionChanges = false
         selectionObservationTimer = nil
         leftButtonWasDown = false
     }
