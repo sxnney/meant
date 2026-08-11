@@ -171,18 +171,16 @@ final class IntelligenceOverlayController {
     }
 
     private struct PlacementSession {
-        let side: PlacementSide
+        let edge: PlacementEdge
         let safeFrame: NSRect
-        let maximumSize: NSSize
+        let maximumHeight: CGFloat
         let fixedX: CGFloat
         let fixedY: CGFloat
     }
 
-    private enum PlacementSide {
+    private enum PlacementEdge {
         case below
         case above
-        case right
-        case left
         case fallback
     }
 
@@ -195,8 +193,16 @@ final class IntelligenceOverlayController {
         let tail = convertAccessibilityRect(geometry.finalLineBounds, primaryTop: primaryTop)
         guard let screen = screen(containingMostOf: bounds) else { return }
         let normalizedBounds = normalize(bounds, scale: screen.backingScaleFactor)
-        let normalizedTail = normalize(tail, scale: screen.backingScaleFactor)
+        var normalizedTail = normalize(tail, scale: screen.backingScaleFactor)
         guard normalizedBounds.width > 0, normalizedBounds.height > 0 else { return }
+        if !normalizedBounds.insetBy(dx: -8, dy: -8).intersects(normalizedTail) {
+            normalizedTail = NSRect(
+                x: normalizedBounds.maxX - 1,
+                y: normalizedBounds.minY,
+                width: 1,
+                height: min(18, normalizedBounds.height)
+            )
+        }
         pendingAnchor = SelectionAnchor(
             bounds: normalizedBounds,
             finalLineBounds: normalizedTail,
@@ -234,101 +240,59 @@ final class IntelligenceOverlayController {
     private func makePlacementSession(anchor: SelectionAnchor?) -> PlacementSession? {
         guard let screen = anchor?.screen ?? fallbackScreen(), !screen.visibleFrame.isEmpty else { return nil }
         let safe = screen.visibleFrame.insetBy(dx: Metrics.screenMargin, dy: Metrics.screenMargin)
-        let reference = NSSize(
-            width: min(Metrics.maximumWidth, safe.width),
-            height: min(Metrics.minimumStableHeight, safe.height)
-        )
+        let maximumWidth = min(Metrics.maximumWidth, safe.width)
 
         guard let anchor else {
-            let x = safe.midX - reference.width / 2
+            let x = safe.midX - maximumWidth / 2
             let top = safe.maxY - Metrics.fallbackTopInset
             return PlacementSession(
-                side: .fallback,
+                edge: .fallback,
                 safeFrame: safe,
-                maximumSize: NSSize(width: safe.width, height: top - safe.minY),
+                maximumHeight: top - safe.minY,
                 fixedX: x,
                 fixedY: top
             )
         }
 
         let gap = Metrics.anchorGap
-        let belowSpace = anchor.bounds.minY - safe.minY - gap
-        let aboveSpace = safe.maxY - anchor.bounds.maxY - gap
-        let rightSpace = safe.maxX - anchor.bounds.maxX - gap
-        let leftSpace = anchor.bounds.minX - safe.minX - gap
-        let side: PlacementSide
-        if belowSpace >= reference.height {
-            side = .below
-        } else if aboveSpace >= reference.height {
-            side = .above
-        } else if rightSpace >= reference.width {
-            side = .right
-        } else if leftSpace >= reference.width {
-            side = .left
-        } else {
-            side = belowSpace >= aboveSpace ? .below : .above
-        }
-
-        let selectionEndX = anchor.finalLineBounds.maxX
-        let stableX = clamp(
-            selectionEndX - Metrics.anchorInset,
-            minimum: safe.minX,
-            maximum: safe.maxX - reference.width
-        )
-        let stableY = clamp(
-            anchor.finalLineBounds.midY - min(Metrics.maximumHeight, safe.height) / 2,
-            minimum: safe.minY,
-            maximum: safe.maxY - min(Metrics.maximumHeight, safe.height)
-        )
-
-        switch side {
-        case .below:
-            let top = min(anchor.bounds.minY - gap, safe.maxY)
+        let belowSpace = anchor.finalLineBounds.minY - safe.minY - gap
+        let aboveSpace = safe.maxY - anchor.finalLineBounds.maxY - gap
+        guard max(belowSpace, aboveSpace) >= Metrics.singleLineHeight else {
+            let x = safe.midX - maximumWidth / 2
+            let top = safe.maxY - Metrics.fallbackTopInset
             return PlacementSession(
-                side: side,
+                edge: .fallback,
                 safeFrame: safe,
-                maximumSize: NSSize(width: safe.width, height: max(Metrics.singleLineHeight, top - safe.minY)),
-                fixedX: stableX,
+                maximumHeight: top - safe.minY,
+                fixedX: x,
                 fixedY: top
             )
-        case .above:
-            let bottom = max(anchor.bounds.maxY + gap, safe.minY)
-            return PlacementSession(
-                side: side,
-                safeFrame: safe,
-                maximumSize: NSSize(width: safe.width, height: max(Metrics.singleLineHeight, safe.maxY - bottom)),
-                fixedX: stableX,
-                fixedY: bottom
-            )
-        case .right:
-            let left = clamp(
-                anchor.bounds.maxX + gap,
-                minimum: safe.minX,
-                maximum: safe.maxX - reference.width
-            )
-            return PlacementSession(
-                side: side,
-                safeFrame: safe,
-                maximumSize: NSSize(width: max(Metrics.singleLineHeight, safe.maxX - left), height: safe.height),
-                fixedX: left,
-                fixedY: stableY
-            )
-        case .left:
-            let right = clamp(
-                anchor.bounds.minX - gap,
-                minimum: safe.minX + reference.width,
-                maximum: safe.maxX
-            )
-            return PlacementSession(
-                side: side,
-                safeFrame: safe,
-                maximumSize: NSSize(width: max(Metrics.singleLineHeight, right - safe.minX), height: safe.height),
-                fixedX: right,
-                fixedY: stableY
-            )
-        case .fallback:
-            return nil
         }
+
+        let stableX = clamp(
+            anchor.finalLineBounds.maxX - Metrics.anchorInset,
+            minimum: safe.minX,
+            maximum: safe.maxX - maximumWidth
+        )
+
+        let useBelow = belowSpace >= Metrics.minimumExpandedHeight
+            || (aboveSpace < Metrics.minimumExpandedHeight && belowSpace >= aboveSpace)
+        if useBelow {
+            return PlacementSession(
+                edge: .below,
+                safeFrame: safe,
+                maximumHeight: belowSpace,
+                fixedX: stableX,
+                fixedY: anchor.finalLineBounds.minY - gap
+            )
+        }
+        return PlacementSession(
+            edge: .above,
+            safeFrame: safe,
+            maximumHeight: aboveSpace,
+            fixedX: stableX,
+            fixedY: anchor.finalLineBounds.maxY + gap
+        )
     }
 
     private func fallbackScreen() -> NSScreen? {
@@ -339,17 +303,15 @@ final class IntelligenceOverlayController {
         guard let placementSession else { return }
         let safe = placementSession.safeFrame
         let fittedSize = NSSize(
-            width: min(size.width, placementSession.maximumSize.width),
-            height: min(size.height, placementSession.maximumSize.height)
+            width: min(size.width, safe.width),
+            height: min(size.height, placementSession.maximumHeight)
         )
         var origin: NSPoint
-        switch placementSession.side {
+        switch placementSession.edge {
         case .below, .fallback:
             origin = NSPoint(x: placementSession.fixedX, y: placementSession.fixedY - fittedSize.height)
-        case .above, .right:
+        case .above:
             origin = NSPoint(x: placementSession.fixedX, y: placementSession.fixedY)
-        case .left:
-            origin = NSPoint(x: placementSession.fixedX - fittedSize.width, y: placementSession.fixedY)
         }
         origin.x = clamp(origin.x, minimum: safe.minX, maximum: safe.maxX - fittedSize.width)
         origin.y = clamp(origin.y, minimum: safe.minY, maximum: safe.maxY - fittedSize.height)
@@ -392,8 +354,7 @@ final class IntelligenceOverlayController {
         static let choiceHeight: CGFloat = 52
         static let twoLineHeight: CGFloat = 64
         static let maximumWidth: CGFloat = 440
-        static let maximumHeight: CGFloat = 460
-        static let minimumStableHeight: CGFloat = 220
+        static let minimumExpandedHeight: CGFloat = 220
         static let screenMargin: CGFloat = 12
         static let anchorGap: CGFloat = 10
         static let anchorInset: CGFloat = 24
